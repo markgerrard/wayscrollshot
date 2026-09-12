@@ -32,6 +32,10 @@ pub struct Args {
     #[arg(long)]
     pub capture_bar: bool,
 
+    /// Open the locally cached gallery of cloud captures.
+    #[arg(long)]
+    pub cloud_gallery: bool,
+
     /// Initial selection for menu actions.
     #[arg(long, default_value = "area", value_parser = ["area", "window", "screen"])]
     pub select_mode: String,

@@ -81,6 +81,9 @@ public_base_url = "https://wayscrollshot.lon1.cdn.digitaloceanspaces.com"
 
 # Uploaded screenshots should open directly from the copied share URL.
 object_acl = "public-read"
+
+# Local gallery previews expire; cloud objects and metadata remain available.
+cache_ttl_hours = 24
 ```
 
 Then restrict the file permissions:
@@ -119,4 +122,3 @@ Confirm all of the following in the handoff response without including either cr
 - dedicated limited key created and stored in the two Secret Service entries
 - `cloud.toml` written at the path above
 - upload, public fetch, and delete smoke test passed
-

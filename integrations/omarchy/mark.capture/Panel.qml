@@ -16,7 +16,8 @@ Panel {
         {label: "Capture Area", hint: "", icon: 0, args: ["--screenshot"]},
         {label: "Capture Fullscreen", hint: "", icon: 5, args: ["--screenshot", "--select-mode", "screen"]},
         {label: "Capture Window", hint: "", icon: 6, args: ["--screenshot", "--select-mode", "window"]},
-        {label: "Scrolling Capture", hint: "Super Alt R", icon: 7, args: ["--auto-scroll"]}
+        {label: "Scrolling Capture", hint: "Super Alt R", icon: 7, args: []},
+        {label: "View Cloud", hint: "", icon: 5, args: ["--cloud-gallery"]}
     ]
     function activate(index) {
         pendingArgs = [Quickshell.env("HOME") + "/.local/bin/wayscrollshot", "--toggle"].concat(rows[index].args)

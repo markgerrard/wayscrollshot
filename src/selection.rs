@@ -146,29 +146,51 @@ impl Selector {
         })
     }
     fn toolbar(&self) -> Vec<(f64, f64, &'static str, usize)> {
-        if self.show_modes {
+        if self.mode == Mode::Scroll {
+            vec![(0., 142., "Start capture", 0)]
+        } else if self.show_modes {
             vec![
                 (0., 94., "Area", 0),
                 (98., 94., "Full screen", 5),
                 (196., 94., "Window", 6),
                 (294., 94., "Scrolling", 7),
                 (408., 90., "Cancel", 4),
-                (504., 124., "Capture", 0),
             ]
         } else {
-            vec![
-                (0., 106., "Cancel", 4),
-                (110., 166., "Full screen", 5),
-                (280., 160., "Capture", 0),
-            ]
+            vec![(0., 106., "Cancel", 4), (110., 166., "Full screen", 5)]
         }
     }
     fn toolbar_width(&self) -> f64 {
-        if self.show_modes {
-            628.
+        if self.mode == Mode::Scroll {
+            142.
+        } else if self.show_modes {
+            498.
         } else {
-            440.
+            276.
         }
+    }
+    fn toolbar_y(&self) -> f64 {
+        if self.mode != Mode::Scroll {
+            return TOOLBAR_Y as f64;
+        }
+        let Some(region) = self.selection.as_ref() else {
+            return self.height as f64 / 2. + 38.;
+        };
+        if region.y >= 74 {
+            f64::from(region.y - 62)
+        } else {
+            f64::from(region.y + 12)
+        }
+    }
+    fn toolbar_left(&self) -> f64 {
+        let width = self.toolbar_width();
+        if self.mode == Mode::Scroll {
+            if let Some(region) = self.selection.as_ref() {
+                return (region.x as f64 + region.w as f64 / 2. - width / 2.)
+                    .clamp(8., (self.width as f64 - width - 8.).max(8.));
+            }
+        }
+        (self.width as f64 - width) / 2.
     }
     fn window_at_pointer(&mut self) {
         let x = self.position.0 as i32 + self.output.x;
@@ -192,8 +214,9 @@ impl Selector {
     }
     fn toolbar_hover(&self) -> Option<usize> {
         let (x, y) = self.position;
-        let bx = (self.width as f64 - self.toolbar_width()) / 2.;
-        if y < TOOLBAR_Y as f64 - 4. || y > TOOLBAR_Y as f64 + 52. {
+        let bx = self.toolbar_left();
+        let by = self.toolbar_y();
+        if y < by - 4. || y > by + 52. {
             return None;
         }
         self.toolbar()
@@ -202,7 +225,9 @@ impl Selector {
     }
     fn press(&mut self) {
         if let Some(button) = self.toolbar_hover() {
-            if self.show_modes {
+            if self.mode == Mode::Scroll {
+                self.finish();
+            } else if self.show_modes {
                 match button {
                     0 => {
                         self.mode = Mode::Area;
@@ -211,6 +236,7 @@ impl Selector {
                     1 => {
                         self.mode = Mode::Screen;
                         self.choose_screen();
+                        self.finish();
                     }
                     2 => {
                         self.window_locked = false;
@@ -219,7 +245,8 @@ impl Selector {
                     }
                     3 => {
                         self.mode = Mode::Scroll;
-                        self.selection = None;
+                        self.window_locked = true;
+                        self.choose_window();
                     }
                     4 => self.exit = true,
                     _ => self.finish(),
@@ -227,8 +254,10 @@ impl Selector {
             } else {
                 match button {
                     0 => self.exit = true,
-                    1 => self.choose_screen(),
-                    _ => self.finish(),
+                    _ => {
+                        self.choose_screen();
+                        self.finish();
+                    }
                 }
             }
             return;
@@ -236,6 +265,7 @@ impl Selector {
         if self.mode == Mode::Window && !self.window_locked {
             self.window_at_pointer();
             self.window_locked = true;
+            self.finish();
             return;
         }
         let (x, y) = self.position;
@@ -358,21 +388,34 @@ impl Selector {
             } else {
                 "Drag to select an area"
             }
+        } else if self.selection.is_some() && self.mode == Mode::Scroll {
+            "Drag to adjust · Start scroll or press Enter · Esc to cancel"
         } else if self.selection.is_some() {
             "Drag edges to adjust · Enter to capture · Esc to cancel"
         } else if self.mode == Mode::Window {
-            "Point at a window · Enter to capture · Esc to cancel"
+            "Click a window to capture · Esc to cancel"
+        } else if self.mode == Mode::Scroll {
+            "Drag a scrolling area · Start scroll or press Enter · Esc to cancel"
         } else {
-            "Drag to select · Space for window · Enter to capture · Esc to cancel"
+            "Drag an area to capture · Space for window · Esc to cancel"
         };
         let tw = self.toolbar_width() as f32;
-        let bx = (self.width as f32 - tw) / 2.;
-        let by = TOOLBAR_Y;
-        ui::panel(&mut p, bx - 8., by - 12., tw + 16., 96., 18.);
+        let bx = self.toolbar_left() as f32;
+        let by = self.toolbar_y() as f32;
+        let compact_scroll = self.mode == Mode::Scroll;
+        ui::panel(
+            &mut p,
+            bx - 8.,
+            by - 12.,
+            tw + 16.,
+            if compact_scroll { 72. } else { 96. },
+            18.,
+        );
         for (i, (offset, w, label, icon)) in self.toolbar().iter().enumerate() {
             let (offset, w) = (*offset as f32, *w as f32);
-            let primary = *label == "Capture";
+            let primary = *label == "Start capture";
             let selected = self.show_modes
+                && self.mode != Mode::Scroll
                 && i < 4
                 && i == match self.mode {
                     Mode::Area => 0,
@@ -413,14 +456,38 @@ impl Selector {
                 },
             );
         }
-        ui::text(
-            &mut p,
-            hint,
-            (self.width as f32 - ui::text_width(hint, 13.)) / 2.,
-            by + 65.,
-            13.,
-            [167, 174, 190, 255],
-        );
+        if !compact_scroll {
+            ui::text(
+                &mut p,
+                hint,
+                (self.width as f32 - ui::text_width(hint, 13.)) / 2.,
+                by + 65.,
+                13.,
+                [167, 174, 190, 255],
+            );
+        } else if self.selection.is_none() {
+            let prompt = "Drag to capture the scrolling part of the screen";
+            let prompt_width = ui::text_width(prompt, 15.) + 32.;
+            let prompt_x = (self.width as f32 - prompt_width) / 2.;
+            let prompt_y = self.height as f32 / 2. - 28.;
+            ui::rounded(
+                &mut p,
+                prompt_x,
+                prompt_y,
+                prompt_width,
+                44.,
+                22.,
+                [232, 232, 235, 245],
+            );
+            ui::text(
+                &mut p,
+                prompt,
+                prompt_x + 16.,
+                prompt_y + 11.,
+                15.,
+                [35, 36, 41, 255],
+            );
+        }
         let needed = (self.width * self.height * 4) as usize;
         if self.pool.len() < needed {
             if self.pool.resize(needed).is_err() {
@@ -716,7 +783,11 @@ impl PointerHandler for Selector {
                     self.dirty = true;
                 }
                 PointerEventKind::Release { button: 272, .. } => {
+                    let completed_drag = self.drag.is_some();
                     self.drag = None;
+                    if completed_drag && self.mode != Mode::Scroll {
+                        self.finish();
+                    }
                 }
                 PointerEventKind::Motion { .. } if self.drag.is_some() => {
                     self.motion();
@@ -872,12 +943,17 @@ pub fn select(scrolling: bool, show_modes: bool, initial: &str) -> Result<Option
             state.choose_screen();
             if !scrolling {
                 state.mode = Mode::Screen;
+                state.finish();
             }
         }
         "window" => {
             state.mode = Mode::Window;
         }
         _ => {}
+    }
+    if scrolling && state.selection.is_none() {
+        state.choose_window();
+        state.window_locked = true;
     }
     while !state.exit {
         queue.blocking_dispatch(&mut state)?;

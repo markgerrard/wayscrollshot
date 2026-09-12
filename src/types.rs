@@ -18,14 +18,16 @@ pub struct Region {
 pub struct Control {
     running: AtomicBool,
     paused: AtomicBool,
+    auto_scroll: AtomicBool,
 }
 
 impl Control {
     /// Creates a running, unpaused control state.
-    pub fn new() -> Self {
+    pub fn new(auto_scroll: bool) -> Self {
         Self {
             running: AtomicBool::new(true),
             paused: AtomicBool::new(false),
+            auto_scroll: AtomicBool::new(auto_scroll),
         }
     }
 
@@ -34,6 +36,12 @@ impl Control {
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
+    }
+    pub fn enable_auto_scroll(&self) {
+        self.auto_scroll.store(true, Ordering::Relaxed);
+    }
+    pub fn is_auto_scroll(&self) -> bool {
+        self.auto_scroll.load(Ordering::Relaxed)
     }
 
     /// Requests worker shutdown.
@@ -71,10 +79,15 @@ pub struct StitchState {
     pub last_error: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum UserCommand {
     Save,
     Copy,
+    Cloud,
+    EnableAuto,
+    Previous,
+    Next,
+    Open,
     Cancel,
     TogglePause,
 }
@@ -83,5 +96,6 @@ pub enum UserCommand {
 pub enum LayerMessage {
     Preview(PreviewImage),
     Paused(bool),
+    Auto(bool),
     Dimensions(u32, u32),
 }

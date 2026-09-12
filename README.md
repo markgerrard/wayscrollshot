@@ -4,14 +4,14 @@ An Omarchy / Hyprland fork of [jswysnemc/wayscrollshot](https://github.com/jswys
 
 ## This fork
 
-The optional [Omarchy panel integration](integrations/omarchy/README.md) adds a capture icon and dropdown menu to the top panel.
+The optional [Omarchy panel integration](integrations/omarchy/README.md) adds a capture icon and dropdown menu to the top panel, including the local cloud gallery.
 
-**Super + Shift + Print Screen** opens the unified capture bar near the top of the screen on this Omarchy installation. There is one compact panel, with its hints inside the bar. Choose **Area**, **Full screen**, **Window**, or **Scrolling**, then press **Enter / Capture**. Still captures go directly to the Save / Copy review; Scrolling starts automatic scrolling. Existing Print Screen bindings remain unchanged.
+**Super + Shift + Print Screen** opens the unified capture bar near the top of the screen on this Omarchy installation. Area captures on drag release, Full screen captures when selected, and Window captures when clicked. Scrolling collapses the mode bar to a small **Start capture** pill and starts in manual mode; choose **Auto** from its live card when you want the app to drive the page.
 
 From the terminal, use `wayscrollshot --capture-bar` for the mode bar or `wayscrollshot --screenshot` for a single screenshot. The original scrolling shortcuts remain available.
 
 - Drag to select, press **Space** to select the window under the pointer, or use **F / Full screen** for the monitor where selection started.
-- Adjust any edge or corner before pressing **Enter / Capture**. In browsers, lower the top edge to exclude tabs and the address bar.
+- In scrolling mode, adjust any edge or corner before choosing **Start capture**. In browsers, lower the top edge to exclude tabs and the address bar.
 - Dimmed capture mask, a bounded live preview that follows new content, and labeled controls with ImageGen artwork.
 - Automatic scrolling advances relative to crop height and learns the application's scroll distance. Uncertain overlaps retry after settling, then backtrack with smaller jumps.
 - Moving the pointer outside the capture area pauses automatic scrolling; returning resumes it. Finishing remains available while paused.
@@ -19,7 +19,7 @@ From the terminal, use `wayscrollshot --capture-bar` for the mode bar or `wayscr
 
 The native selector and automatic scrolling use `hyprctl`; explicit geometry remains available for other compatible Wayland compositors. Only the monitor under the pointer when selection opens is used by the native selector.
 
-On this Omarchy setup, **Super + R** starts/finishes manual scrolling capture and **Super + Alt + R** starts/finishes automatic capture. These shortcuts are local configuration, not installed by the build.
+On this Omarchy setup, **Super + R** starts/finishes a manual scrolling capture and **Super + Alt + R** opens the manual scrolling selector. Choose **Auto** in the live card to switch the running capture to automatic scrolling. These shortcuts are local configuration, not installed by the build.
 
 The screenshots and distribution instructions below originated upstream; prebuilt upstream releases do not contain these fork changes.
 ![preview](./preview.png)
@@ -33,6 +33,7 @@ The screenshots and distribution instructions below originated upstream; prebuil
 - Rounded button UI with hover effects (powered by tiny-skia)
 - Keyboard shortcuts and mouse control
 - Save to file or copy to clipboard
+- Upload to DigitalOcean Spaces, copy a CDN link, and browse recent cloud captures
 - Supports reverse scrolling (col-sample only)
 
 ## How It Works
@@ -178,6 +179,9 @@ wayscrollshot -w 320
 # Disable preview window
 wayscrollshot --no-preview
 
+# Browse captures uploaded from this machine
+wayscrollshot --cloud-gallery
+
 # Disable region border overlay
 wayscrollshot --no-border
 
@@ -204,12 +208,13 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
+| `--cloud-gallery` | Open the cached cloud-capture gallery | false |
 | `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | col-sample |
 | `REGION` | Existing slurp/grim geometry, for example `10,20 300x400`; use `-` to read stdin | Native selector |
 
 ### Controls
 
-During selection: drag to create an area; Space selects the window under the pointer; F selects the screen; drag the handles to resize; Enter starts capture; Esc cancels. A scrolling region must be at least 32 × 160 pixels.
+During selection, Area captures when the drag is released, Window captures when the target is clicked, and Full screen captures as soon as it is selected. Scrolling preselects the window under the pointer and collapses to a compact step; drag to replace it with a custom region, then choose Start capture or press Enter. Esc cancels. A scrolling region must be at least 32 × 160 pixels.
 
 ```bash
 wayscrollshot --auto-scroll
@@ -225,6 +230,8 @@ wayscrollshot --toggle  # finish the running capture (or start if none exists)
 |--------|--------|
 | Done / Save | Finish, save image and exit |
 | Copy | Copy to clipboard and exit |
+| Cloud (final review) | Save locally, upload to Spaces, and copy the CDN link |
+| Auto (manual scrolling) | Switch the running capture to automatic scrolling |
 | Pause / Resume (live only) | Pause or resume capture |
 | Cancel | Cancel capture and exit |
 
@@ -233,10 +240,18 @@ wayscrollshot --toggle  # finish the running capture (or start if none exists)
 |-----|--------|
 | `S` | Save and exit |
 | `C` | Copy to clipboard and exit |
+| `U` | Upload to cloud and copy its link from final review |
+| `A` | Switch a manual scrolling capture to Auto |
 | `Space` | Pause/Resume capture |
 | `Q` / `Esc` | Cancel and exit |
 
 > **Note:** Keyboard shortcuts depend on the compositor's `wlr-layer-shell` `OnDemand` keyboard focus policy. They work well under niri; on Hyprland and some other compositors you may need to hover the mouse over the control bar first. Mouse clicks on the control bar buttons work on all compositors.
+
+### Cloud gallery
+
+The Cloud action reads DigitalOcean Spaces settings from `~/.config/wayscrollshot/cloud.toml` and credentials from the desktop Secret Service keyring. It always saves the original capture locally before uploading it. The CDN link is copied to the clipboard after a successful upload.
+
+`wayscrollshot --cloud-gallery` opens a bottom-left panel with **Back**, **Next**, **Open**, and **Close**. SQLite metadata lives at `~/.cache/wayscrollshot/cloud.sqlite3`. Small preview images are cached for `cache_ttl_hours` (24 hours by default); expiring a preview does not delete the local screenshot or its Spaces object.
 
 ## Limitations
 

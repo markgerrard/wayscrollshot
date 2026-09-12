@@ -13,6 +13,12 @@ use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
 /// Runs one interactive capture session from region selection to final action.
 pub fn run(mut args: Args) -> Result<()> {
+    if args.cloud_gallery {
+        if !is_wayland_session() {
+            bail!("Wayland session required");
+        }
+        return run_cloud_gallery(args.preview_width);
+    }
     let Some(socket) = crate::control_socket::CaptureSocket::open(args.toggle)? else {
         return Ok(());
     };
@@ -29,9 +35,6 @@ pub fn run(mut args: Args) -> Result<()> {
             return Ok(());
         };
         args.screenshot = !scrolling;
-        if args.capture_bar {
-            args.auto_scroll = scrolling;
-        }
         region
     } else {
         resolve_region(&args)?
@@ -54,7 +57,7 @@ pub fn run(mut args: Args) -> Result<()> {
         region.w >= 32 && region.h >= 160,
         "Select an area at least 32 pixels wide and 160 pixels high"
     );
-    let control = Arc::new(Control::new());
+    let control = Arc::new(Control::new(args.auto_scroll));
     let state = Arc::new(Mutex::new(StitchState::default()));
     let (tx, rx) = mpsc::channel();
     let mut mask = if args.no_border {
@@ -70,6 +73,9 @@ pub fn run(mut args: Args) -> Result<()> {
     };
     let mut revision = 0;
     let mut action = None;
+    if let Some(overlay) = live.as_ref() {
+        overlay.send(LayerMessage::Auto(args.auto_scroll));
+    }
     let worker = spawn_capture_worker(
         region.clone(),
         control.clone(),
@@ -93,6 +99,12 @@ pub fn run(mut args: Args) -> Result<()> {
                 control.toggle_pause();
                 if let Some(o) = live.as_ref() {
                     o.send(LayerMessage::Paused(control.is_paused()));
+                }
+            }
+            Ok(UserCommand::EnableAuto) => {
+                control.enable_auto_scroll();
+                if let Some(o) = live.as_ref() {
+                    o.send(LayerMessage::Auto(true));
                 }
             }
             Ok(command) => {
@@ -135,8 +147,11 @@ fn finish_capture(
     reason: String,
     action: Option<UserCommand>,
 ) -> Result<()> {
-    let mut clipboard =
-        matches!(action, Some(UserCommand::Copy)) || (action.is_none() && args.clipboard);
+    let mut final_action = action.unwrap_or(if args.clipboard {
+        UserCommand::Copy
+    } else {
+        UserCommand::Save
+    });
     if !args.no_preview && action.is_none() {
         let _ = std::process::Command::new("notify-send")
             .args(["Capture ready to review", &reason])
@@ -155,11 +170,15 @@ fn finish_capture(
             }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(UserCommand::Save) => {
-                    clipboard = false;
+                    final_action = UserCommand::Save;
                     break false;
                 }
                 Ok(UserCommand::Copy) => {
-                    clipboard = true;
+                    final_action = UserCommand::Copy;
+                    break false;
+                }
+                Ok(UserCommand::Cloud) => {
+                    final_action = UserCommand::Cloud;
                     break false;
                 }
                 Ok(UserCommand::Cancel) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
@@ -171,17 +190,73 @@ fn finish_capture(
             return Ok(());
         }
     }
-    let message = if clipboard {
-        copy_to_clipboard(img)?;
-        format!("{reason}. Copied to clipboard")
-    } else {
-        let path = save_image(img, args.output)?;
-        println!("{}", path.display());
-        format!("{reason}. Saved to {}", path.display())
+    let message = match final_action {
+        UserCommand::Copy => {
+            copy_to_clipboard(img)?;
+            format!("{reason}. Copied to clipboard")
+        }
+        UserCommand::Cloud => {
+            let path = save_image(img.clone(), args.output)?;
+            let entry = crate::cloud::upload(&img, &path)?;
+            crate::cloud::copy_url(&entry.url)?;
+            println!("{}", entry.url);
+            format!("{reason}. Cloud link copied")
+        }
+        _ => {
+            let path = save_image(img, args.output)?;
+            println!("{}", path.display());
+            format!("{reason}. Saved to {}", path.display())
+        }
     };
     let _ = std::process::Command::new("notify-send")
         .args(["Screen capture", &message])
         .status();
+    Ok(())
+}
+
+fn run_cloud_gallery(preview_width: u32) -> Result<()> {
+    let entries = crate::cloud::gallery_entries()?;
+    if entries.is_empty() {
+        bail!("No cloud captures yet. Use Cloud from a capture preview first.");
+    }
+    let width = preview_width.max(320);
+    let (tx, rx) = mpsc::channel();
+    let mut gallery = crate::overlay::LayerShellOverlay::new_gallery(tx, width)?;
+    let mut index = 0usize;
+    show_gallery_entry(&gallery, &entries[index], width)?;
+
+    loop {
+        match rx.recv() {
+            Ok(UserCommand::Previous) => {
+                index = (index + entries.len() - 1) % entries.len();
+                show_gallery_entry(&gallery, &entries[index], width)?;
+            }
+            Ok(UserCommand::Next) => {
+                index = (index + 1) % entries.len();
+                show_gallery_entry(&gallery, &entries[index], width)?;
+            }
+            Ok(UserCommand::Open) => {
+                crate::cloud::open_url(&entries[index].url)?;
+                break;
+            }
+            Ok(UserCommand::Cancel) | Err(_) => break,
+            _ => {}
+        }
+    }
+    gallery.stop();
+    Ok(())
+}
+
+fn show_gallery_entry(
+    gallery: &crate::overlay::LayerShellOverlay,
+    entry: &crate::cloud::CloudEntry,
+    width: u32,
+) -> Result<()> {
+    gallery.send(LayerMessage::Preview(crate::cloud::gallery_preview(
+        entry, width,
+    )?));
+    gallery.send(LayerMessage::Dimensions(entry.width, entry.height));
+    gallery.send(LayerMessage::Paused(true));
     Ok(())
 }
 
@@ -238,11 +313,12 @@ fn capture_loop(
     state: &Arc<Mutex<StitchState>>,
     args: &Args,
 ) -> Result<String> {
-    let mut auto = if args.auto_scroll {
+    let mut auto = if control.is_auto_scroll() {
         Some(crate::auto_scroll::AutoScroller::new(region)?)
     } else {
         None
     };
+    let mut auto_started = auto.as_ref().map(|_| Instant::now());
     let config = MatchConfig {
         min_overlap: (region.h / 12).max(48),
         accept_diff: 3.5,
@@ -260,10 +336,17 @@ fn capture_loop(
     let mut submitted = false;
     let mut unchanged_steps = 0;
     let mut overlap_retries = 0;
-    let started = Instant::now();
     let mut last_accepted = Instant::now();
     while control.is_running() {
         thread::sleep(Duration::from_millis(50));
+        if auto.is_none() && control.is_auto_scroll() {
+            auto = Some(crate::auto_scroll::AutoScroller::new(region)?);
+            auto_started = Some(Instant::now());
+            candidate = None;
+            submitted = false;
+            stable_since = Instant::now();
+            last_accepted = Instant::now();
+        }
         if control.is_paused() {
             candidate = None;
             submitted = false;
@@ -271,7 +354,7 @@ fn capture_loop(
             last_accepted = Instant::now();
             continue;
         }
-        if auto.is_some() && started.elapsed() > Duration::from_secs(180) {
+        if auto_started.is_some_and(|started| started.elapsed() > Duration::from_secs(180)) {
             return Ok("Time limit reached; partial capture".into());
         }
         let frame = capture_frame(region)?;

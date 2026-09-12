@@ -1,6 +1,7 @@
 mod auto_scroll;
 mod capture;
 mod cli;
+mod cloud;
 mod constants;
 mod control_socket;
 mod opencv_compat;

@@ -48,6 +48,13 @@ const HEADER_HEIGHT: u32 = 54;
 const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT + HEADER_HEIGHT;
 const PREVIEW_GAP: i32 = 8;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum OverlayMode {
+    Live,
+    Review,
+    Gallery,
+}
+
 pub struct LayerShellOverlay {
     pub width: u32,
     tx: Option<mpsc::Sender<LayerMessage>>,
@@ -61,7 +68,7 @@ impl LayerShellOverlay {
         region: Region,
         preview_width: u32,
     ) -> Result<Self> {
-        Self::new_with_area(command_tx, region, preview_width, None)
+        Self::new_with_area(command_tx, region, preview_width, None, OverlayMode::Review)
     }
 
     pub fn new_live(
@@ -73,7 +80,28 @@ impl LayerShellOverlay {
         let Some(area) = live_preview_area(&region, preview_width, &outputs) else {
             return Ok(None);
         };
-        Self::new_with_area(command_tx, region, area.w, Some(area)).map(Some)
+        Self::new_with_area(command_tx, region, area.w, Some(area), OverlayMode::Live).map(Some)
+    }
+
+    pub fn new_gallery(command_tx: mpsc::Sender<UserCommand>, preview_width: u32) -> Result<Self> {
+        let output = probe_output_rects()?
+            .into_iter()
+            .next()
+            .context("No screen available for cloud gallery")?;
+        let region = Region {
+            raw: String::new(),
+            x: output.x,
+            y: output.y,
+            w: output.width as u32,
+            h: output.height as u32,
+        };
+        Self::new_with_area(
+            command_tx,
+            region,
+            preview_width,
+            None,
+            OverlayMode::Gallery,
+        )
     }
 
     fn new_with_area(
@@ -81,14 +109,21 @@ impl LayerShellOverlay {
         region: Region,
         preview_width: u32,
         area: Option<Region>,
+        mode: OverlayMode,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let ready = Arc::new(AtomicBool::new(false));
         let ready_clone = ready.clone();
         let handle = thread::spawn(move || {
-            if let Err(err) =
-                run_layer_shell_overlay(rx, command_tx, ready_clone, region, preview_width, area)
-            {
+            if let Err(err) = run_layer_shell_overlay(
+                rx,
+                command_tx,
+                ready_clone,
+                region,
+                preview_width,
+                area,
+                mode,
+            ) {
                 log::warn!("layer-shell overlay failed: {err}");
             }
         });
@@ -134,13 +169,14 @@ struct LayerPreview {
     max_height: u32,
     region: Region,
     fixed_area: Option<Region>,
-    review: bool,
+    mode: OverlayMode,
     dimensions: Option<(u32, u32)>,
     configured: bool,
     exit: bool,
     preview: Option<PreviewImage>,
     command_tx: mpsc::Sender<UserCommand>,
     paused: bool,
+    auto_enabled: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: bool,
     pointer: Option<wl_pointer::WlPointer>,
@@ -154,12 +190,16 @@ impl LayerPreview {
 
     fn update_position(&mut self) {
         let output_rects = self.output_rects();
-        let (margin_top, margin_left) = overlay_margins(
-            &self.region,
-            self.width,
-            &output_rects,
-            self.fixed_area.as_ref(),
-        );
+        let (margin_top, margin_left) = if self.mode == OverlayMode::Live {
+            overlay_margins(
+                &self.region,
+                self.width,
+                &output_rects,
+                self.fixed_area.as_ref(),
+            )
+        } else {
+            bottom_left_margins(&self.region, self.height, &output_rects)
+        };
         self.layer.set_margin(margin_top, 0, 0, margin_left);
     }
 
@@ -286,12 +326,11 @@ impl LayerPreview {
             10.,
             [27, 28, 33, 250],
         );
-        let label = if self.review {
-            "Capture ready"
-        } else if self.paused {
-            "Paused"
-        } else {
-            "Scrolling capture"
+        let label = match self.mode {
+            OverlayMode::Review => "Capture ready",
+            OverlayMode::Gallery => "Cloud captures",
+            OverlayMode::Live if self.paused => "Paused",
+            OverlayMode::Live => "Scrolling capture",
         };
         if self.width >= 180 {
             crate::ui::rounded(
@@ -301,8 +340,10 @@ impl LayerPreview {
                 6.,
                 6.,
                 3.,
-                if self.review {
+                if self.mode == OverlayMode::Review {
                     [123, 180, 157, 255]
+                } else if self.mode == OverlayMode::Gallery {
+                    [128, 167, 237, 255]
                 } else if self.paused {
                     [227, 181, 112, 255]
                 } else {
@@ -331,8 +372,9 @@ impl LayerPreview {
             self.height,
             bar_y,
             self.paused,
+            self.auto_enabled,
             self.hover_button,
-            self.review,
+            self.mode,
         );
 
         self.layer
@@ -348,6 +390,9 @@ impl LayerPreview {
     fn handle_command(&mut self, qh: &QueueHandle<Self>, command: UserCommand) {
         if matches!(command, UserCommand::TogglePause) {
             self.paused = !self.paused;
+            self.request_redraw(qh);
+        } else if matches!(command, UserCommand::EnableAuto) {
+            self.auto_enabled = true;
             self.request_redraw(qh);
         }
         let _ = self.command_tx.send(command);
@@ -368,7 +413,7 @@ impl LayerPreview {
         }
 
         let x = position.0 as u32;
-        let count = if self.review { 3 } else { CONTROL_BUTTON_COUNT };
+        let count = CONTROL_BUTTON_COUNT;
         let segment = self.width / count;
         let index = if segment == 0 {
             0
@@ -376,9 +421,14 @@ impl LayerPreview {
             (x / segment).min(count - 1)
         };
         let command = match index {
+            0 if self.mode == OverlayMode::Gallery => UserCommand::Previous,
+            1 if self.mode == OverlayMode::Gallery => UserCommand::Next,
+            2 if self.mode == OverlayMode::Gallery => UserCommand::Open,
             0 => UserCommand::Save,
             1 => UserCommand::Copy,
-            2 if !self.review => UserCommand::TogglePause,
+            2 if self.mode == OverlayMode::Review => UserCommand::Cloud,
+            2 if !self.auto_enabled => UserCommand::EnableAuto,
+            2 => UserCommand::TogglePause,
             _ => UserCommand::Cancel,
         };
         self.handle_command(qh, command);
@@ -396,7 +446,7 @@ impl LayerPreview {
             && position.0 < self.width as f64
         {
             let x = position.0 as u32;
-            let count = if self.review { 3 } else { CONTROL_BUTTON_COUNT };
+            let count = CONTROL_BUTTON_COUNT;
             let segment = self.width / count;
             let index = if segment == 0 {
                 0
@@ -639,10 +689,31 @@ impl KeyboardHandler for LayerPreview {
 
         if let Some(text) = event.utf8.as_deref() {
             match text {
-                "s" | "S" => self.handle_command(qh, UserCommand::Save),
-                "c" | "C" => self.handle_command(qh, UserCommand::Copy),
+                "s" | "S" if self.mode != OverlayMode::Gallery => {
+                    self.handle_command(qh, UserCommand::Save)
+                }
+                "c" | "C" if self.mode != OverlayMode::Gallery => {
+                    self.handle_command(qh, UserCommand::Copy)
+                }
+                "u" | "U" if self.mode == OverlayMode::Review => {
+                    self.handle_command(qh, UserCommand::Cloud)
+                }
+                "h" | "H" if self.mode == OverlayMode::Gallery => {
+                    self.handle_command(qh, UserCommand::Previous)
+                }
+                "l" | "L" if self.mode == OverlayMode::Gallery => {
+                    self.handle_command(qh, UserCommand::Next)
+                }
+                "o" | "O" if self.mode == OverlayMode::Gallery => {
+                    self.handle_command(qh, UserCommand::Open)
+                }
                 "q" | "Q" => self.handle_command(qh, UserCommand::Cancel),
-                " " if !self.review => self.handle_command(qh, UserCommand::TogglePause),
+                " " if self.mode == OverlayMode::Live => {
+                    self.handle_command(qh, UserCommand::TogglePause)
+                }
+                "a" | "A" if self.mode == OverlayMode::Live && !self.auto_enabled => {
+                    self.handle_command(qh, UserCommand::EnableAuto)
+                }
                 _ => {}
             }
         }
@@ -740,6 +811,7 @@ fn run_layer_shell_overlay(
     region: Region,
     preview_width: u32,
     area: Option<Region>,
+    mode: OverlayMode,
 ) -> Result<()> {
     log::info!("Starting layer-shell overlay thread");
     let output_rects = match probe_output_rects() {
@@ -777,8 +849,11 @@ fn run_layer_shell_overlay(
         selected_output.as_ref(),
     );
 
-    let (margin_top, margin_left) =
-        overlay_margins(&region, initial_preview_width, &output_rects, area.as_ref());
+    let (margin_top, margin_left) = if mode == OverlayMode::Live {
+        overlay_margins(&region, initial_preview_width, &output_rects, area.as_ref())
+    } else {
+        bottom_left_margins(&region, INITIAL_HEIGHT, &output_rects)
+    };
 
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
@@ -806,7 +881,7 @@ fn run_layer_shell_overlay(
         height: INITIAL_HEIGHT,
         max_height: area.as_ref().map_or(region.h.min(480), |a| a.h),
         region,
-        review: area.is_none(),
+        mode,
         dimensions: None,
         fixed_area: area,
         configured: false,
@@ -814,6 +889,7 @@ fn run_layer_shell_overlay(
         preview: None,
         command_tx,
         paused: false,
+        auto_enabled: false,
         keyboard: None,
         keyboard_focus: false,
         pointer: None,
@@ -841,6 +917,10 @@ fn run_layer_shell_overlay(
                 }
                 Ok(LayerMessage::Paused(paused)) => {
                     preview.set_paused(&qh, paused);
+                }
+                Ok(LayerMessage::Auto(enabled)) => {
+                    preview.auto_enabled = enabled;
+                    preview.request_redraw(&qh);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -884,4 +964,25 @@ fn overlay_margins(
         }
     }
     compute_layer_margins(region, width, outputs)
+}
+
+fn bottom_left_margins(region: &Region, height: u32, outputs: &[OutputRect]) -> (i32, i32) {
+    const EDGE_GAP: i32 = 18;
+    if let Some(output) = select_output_for_region(region, outputs) {
+        return (
+            output
+                .height
+                .saturating_sub(height as i32)
+                .saturating_sub(EDGE_GAP),
+            EDGE_GAP,
+        );
+    }
+    (
+        region
+            .y
+            .saturating_add(region.h as i32)
+            .saturating_sub(height as i32)
+            .saturating_sub(EDGE_GAP),
+        region.x.saturating_add(EDGE_GAP),
+    )
 }

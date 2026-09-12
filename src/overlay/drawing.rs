@@ -1,5 +1,6 @@
 use tiny_skia::Pixmap;
 
+use super::OverlayMode;
 use crate::constants::CONTROL_BAR_HEIGHT;
 use crate::types::PreviewImage;
 
@@ -10,8 +11,9 @@ pub(super) fn draw_control_bar(
     height: u32,
     bar_y: u32,
     paused: bool,
+    auto_enabled: bool,
     hover: Option<u32>,
-    review: bool,
+    mode: OverlayMode,
 ) {
     let h = CONTROL_BAR_HEIGHT.min(height.saturating_sub(bar_y));
     let Some(mut p) = Pixmap::new(width, h) else {
@@ -26,21 +28,38 @@ pub(super) fn draw_control_bar(
         12.,
         [27, 28, 33, 250],
     );
-    let count = if review { 3 } else { 4 };
-    let labels = if review {
-        vec!["Save", "Copy", "Cancel"]
-    } else {
-        vec![
+    let count = 4;
+    let labels = match mode {
+        OverlayMode::Review => vec!["Save", "Copy", "Cloud", "Cancel"],
+        OverlayMode::Gallery => vec!["Back", "Next", "Open", "Close"],
+        OverlayMode::Live => vec![
             "Done",
             "Copy",
-            if paused { "Resume" } else { "Pause" },
+            if !auto_enabled {
+                "Auto"
+            } else if paused {
+                "Resume"
+            } else {
+                "Pause"
+            },
             "Cancel",
-        ]
+        ],
     };
-    let icons = if review {
-        vec![0, 1, 4]
-    } else {
-        vec![0, 1, if paused { 3 } else { 2 }, 4]
+    let icons = match mode {
+        OverlayMode::Review => vec![0, 1, 5, 4],
+        OverlayMode::Gallery => vec![3, 2, 5, 4],
+        OverlayMode::Live => vec![
+            0,
+            1,
+            if !auto_enabled {
+                7
+            } else if paused {
+                3
+            } else {
+                2
+            },
+            4,
+        ],
     };
     let segment = width as f32 / count as f32;
     for i in 0..count {

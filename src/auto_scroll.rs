@@ -165,7 +165,7 @@ mod tests {
             w: 900,
             h: 700,
         };
-        let control = Control::new();
+        let control = Control::new(false);
         let mut calls = 0;
         assert!(wait_until_scrollable(&r, &control, || {
             calls += 1;
@@ -183,7 +183,7 @@ mod tests {
             w: 900,
             h: 700,
         };
-        let control = std::sync::Arc::new(Control::new());
+        let control = std::sync::Arc::new(Control::new(false));
         let stop = control.clone();
         let worker = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(10));
