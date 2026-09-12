@@ -148,6 +148,9 @@ impl Selector {
     }
     fn toolbar(&self) -> Vec<(f64, f64, &'static str, usize)> {
         if self.mode == Mode::Scroll {
+            if !self.valid_selection() || self.drag.is_some() {
+                return vec![];
+            }
             vec![
                 (0., 116., "Auto-scroll", 7),
                 (120., 142., "Start capture", 0),
@@ -250,8 +253,9 @@ impl Selector {
                     }
                     3 => {
                         self.mode = Mode::Scroll;
-                        self.window_locked = true;
-                        self.choose_window();
+                        self.window_locked = false;
+                        self.selection = None;
+                        self.auto_requested = false;
                     }
                     4 => self.exit = true,
                     _ => self.finish(),
@@ -408,14 +412,16 @@ impl Selector {
         let bx = self.toolbar_left() as f32;
         let by = self.toolbar_y() as f32;
         let compact_scroll = self.mode == Mode::Scroll;
-        ui::panel(
-            &mut p,
-            bx - 8.,
-            by - 12.,
-            tw + 16.,
-            if compact_scroll { 72. } else { 96. },
-            18.,
-        );
+        if !self.toolbar().is_empty() {
+            ui::panel(
+                &mut p,
+                bx - 8.,
+                by - 12.,
+                tw + 16.,
+                if compact_scroll { 72. } else { 96. },
+                18.,
+            );
+        }
         for (i, (offset, w, label, icon)) in self.toolbar().iter().enumerate() {
             let (offset, w) = (*offset as f32, *w as f32);
             let primary = *label == "Start capture";
@@ -471,7 +477,7 @@ impl Selector {
                 [167, 174, 190, 255],
             );
         } else if self.selection.is_none() {
-            let prompt = "Drag to capture the scrolling part of the screen";
+            let prompt = "Select an area to capture · Space for window";
             let prompt_width = ui::text_width(prompt, 15.) + 32.;
             let prompt_x = (self.width as f32 - prompt_width) / 2.;
             let prompt_y = self.height as f32 / 2. - 28.;
@@ -715,7 +721,7 @@ impl KeyboardHandler for Selector {
             Keysym::Escape => self.exit = true,
             Keysym::Return => self.finish(),
             Keysym::space => {
-                if self.show_modes {
+                if self.show_modes && self.mode != Mode::Scroll {
                     self.mode = Mode::Window;
                 }
                 self.choose_window();
@@ -790,6 +796,7 @@ impl PointerHandler for Selector {
                 PointerEventKind::Release { button: 272, .. } => {
                     let completed_drag = self.drag.is_some();
                     self.drag = None;
+                    self.dirty = true;
                     if completed_drag && self.mode != Mode::Scroll {
                         self.finish();
                     }
@@ -961,10 +968,6 @@ pub fn select(
             state.mode = Mode::Window;
         }
         _ => {}
-    }
-    if scrolling && state.selection.is_none() {
-        state.choose_window();
-        state.window_locked = true;
     }
     while !state.exit {
         queue.blocking_dispatch(&mut state)?;

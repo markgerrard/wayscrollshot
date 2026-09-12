@@ -214,7 +214,7 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 ### Controls
 
-During selection, Area captures when the drag is released, Window captures when the target is clicked, and Full screen captures as soon as it is selected. Scrolling preselects the window under the pointer and collapses to a compact step; drag to replace it with a custom region, then choose Auto-scroll or Start capture. Enter starts manual capture. Esc cancels. A scrolling region must be at least 32 × 160 pixels.
+During selection, Area captures when the drag is released, Window captures when the target is clicked, and Full screen captures as soon as it is selected. Scrolling first shows a selection prompt with no toolbar: drag an area or press Space to select a window. After selection, Auto-scroll and Start capture appear above the region. Enter starts manual capture. Esc cancels. A scrolling region must be at least 32 × 160 pixels.
 
 ```bash
 wayscrollshot --auto-scroll
