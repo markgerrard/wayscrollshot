@@ -356,13 +356,27 @@ pub(crate) fn live_preview_area(
     let ry = region.y;
     let rr = rx + region.w as i32;
     let rb = ry + region.h as i32;
-    let slots = [
+    let side_slots = [
         (rr + gap, top, right - rr - gap, bottom - top),
         (left, top, rx - gap - left, bottom - top),
+    ];
+    if let Some((x, y, w, h)) = side_slots
+        .into_iter()
+        .find(|(_, _, w, h)| *w >= 120 && *h >= (super::INITIAL_HEIGHT + 80) as i32)
+    {
+        return Some(Region {
+            raw: String::new(),
+            x,
+            y,
+            w: (w as u32).min(desired_width),
+            h: h as u32,
+        });
+    }
+    let fallback_slots = [
         (left, top, right - left, ry - gap - top),
         (left, rb + gap, right - left, bottom - rb - gap),
     ];
-    slots
+    fallback_slots
         .into_iter()
         .filter(|(_, _, w, h)| *w >= 96 && *h >= (super::INITIAL_HEIGHT + 32) as i32)
         .max_by_key(|(_, _, w, h)| (*w).min(desired_width as i32) * (*h).min(480))
@@ -371,7 +385,7 @@ pub(crate) fn live_preview_area(
             x,
             y,
             w: (w as u32).min(desired_width),
-            h: (h as u32).min(480),
+            h: h as u32,
         })
 }
 
@@ -440,5 +454,30 @@ mod live_tests {
             }]
         )
         .is_none());
+    }
+
+    #[test]
+    fn side_preview_uses_the_full_available_height() {
+        let r = Region {
+            raw: String::new(),
+            x: 20,
+            y: 100,
+            w: 1300,
+            h: 800,
+        };
+        let p = live_preview_area(
+            &r,
+            280,
+            &[OutputRect {
+                id: 0,
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }],
+        )
+        .unwrap();
+        assert_eq!(p.x, 1328);
+        assert_eq!(p.h, 1064);
     }
 }

@@ -6,12 +6,12 @@ An Omarchy / Hyprland fork of [jswysnemc/wayscrollshot](https://github.com/jswys
 
 The optional [Omarchy panel integration](integrations/omarchy/README.md) adds a capture icon and dropdown menu to the top panel, including the local cloud gallery.
 
-**Super + Shift + Print Screen** opens the unified capture bar near the top of the screen on this Omarchy installation. Area captures on drag release, Full screen captures when selected, and Window captures when clicked. Scrolling collapses the mode bar to a small **Start capture** pill and starts in manual mode; choose **Auto** from its live card when you want the app to drive the page.
+**Super + Shift + Print Screen** opens the unified capture bar near the top of the screen on this Omarchy installation. Area captures on drag release, Full screen captures when selected, and Window captures when clicked. Scrolling collapses the mode bar to **Auto-scroll** and **Start capture** pills. Start capture is manual; Auto-scroll starts with page movement enabled.
 
 From the terminal, use `wayscrollshot --capture-bar` for the mode bar or `wayscrollshot --screenshot` for a single screenshot. The original scrolling shortcuts remain available.
 
 - Drag to select, press **Space** to select the window under the pointer, or use **F / Full screen** for the monitor where selection started.
-- In scrolling mode, adjust any edge or corner before choosing **Start capture**. In browsers, lower the top edge to exclude tabs and the address bar.
+- In scrolling mode, adjust any edge or corner before choosing **Start capture** or **Auto-scroll**. In browsers, lower the top edge to exclude tabs and the address bar.
 - Dimmed capture mask, a bounded live preview that follows new content, and labeled controls with ImageGen artwork.
 - Automatic scrolling advances relative to crop height and learns the application's scroll distance. Uncertain overlaps retry after settling, then backtrack with smaller jumps.
 - Moving the pointer outside the capture area pauses automatic scrolling; returning resumes it. Finishing remains available while paused.
@@ -214,7 +214,7 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 ### Controls
 
-During selection, Area captures when the drag is released, Window captures when the target is clicked, and Full screen captures as soon as it is selected. Scrolling preselects the window under the pointer and collapses to a compact step; drag to replace it with a custom region, then choose Start capture or press Enter. Esc cancels. A scrolling region must be at least 32 × 160 pixels.
+During selection, Area captures when the drag is released, Window captures when the target is clicked, and Full screen captures as soon as it is selected. Scrolling preselects the window under the pointer and collapses to a compact step; drag to replace it with a custom region, then choose Auto-scroll or Start capture. Enter starts manual capture. Esc cancels. A scrolling region must be at least 32 × 160 pixels.
 
 ```bash
 wayscrollshot --auto-scroll

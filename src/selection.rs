@@ -66,6 +66,7 @@ struct Selector {
     selection: Option<Region>,
     drag: Option<((f64, f64), Option<Region>, u8)>,
     result: Option<Region>,
+    auto_requested: bool,
 }
 fn rectangle(x: i32, y: i32, w: u32, h: u32) -> Region {
     Region {
@@ -147,7 +148,10 @@ impl Selector {
     }
     fn toolbar(&self) -> Vec<(f64, f64, &'static str, usize)> {
         if self.mode == Mode::Scroll {
-            vec![(0., 142., "Start capture", 0)]
+            vec![
+                (0., 116., "Auto-scroll", 7),
+                (120., 142., "Start capture", 0),
+            ]
         } else if self.show_modes {
             vec![
                 (0., 94., "Area", 0),
@@ -162,7 +166,7 @@ impl Selector {
     }
     fn toolbar_width(&self) -> f64 {
         if self.mode == Mode::Scroll {
-            142.
+            262.
         } else if self.show_modes {
             498.
         } else {
@@ -226,6 +230,7 @@ impl Selector {
     fn press(&mut self) {
         if let Some(button) = self.toolbar_hover() {
             if self.mode == Mode::Scroll {
+                self.auto_requested = button == 0;
                 self.finish();
             } else if self.show_modes {
                 match button {
@@ -841,7 +846,12 @@ fn query(command: &str) -> Result<Value> {
     anyhow::ensure!(out.status.success(), "Cannot read desktop geometry");
     Ok(serde_json::from_slice(&out.stdout)?)
 }
-pub fn select(scrolling: bool, show_modes: bool, initial: &str) -> Result<Option<(Region, bool)>> {
+pub fn select(
+    scrolling: bool,
+    show_modes: bool,
+    initial: &str,
+    initial_auto: bool,
+) -> Result<Option<(Region, bool, bool)>> {
     let cursor = query("cursorpos")?;
     let cx = cursor["x"].as_i64().unwrap_or(0);
     let cy = cursor["y"].as_i64().unwrap_or(0);
@@ -937,6 +947,7 @@ pub fn select(scrolling: bool, show_modes: bool, initial: &str) -> Result<Option
         selection: None,
         drag: None,
         result: None,
+        auto_requested: initial_auto,
     };
     match initial {
         "screen" => {
@@ -965,7 +976,9 @@ pub fn select(scrolling: bool, show_modes: bool, initial: &str) -> Result<Option
     state.layer.wl_surface().attach(None, 0, 0);
     state.layer.commit();
     conn.flush()?;
-    Ok(state.result.map(|r| (r, state.mode == Mode::Scroll)))
+    Ok(state
+        .result
+        .map(|r| (r, state.mode == Mode::Scroll, state.auto_requested)))
 }
 #[cfg(test)]
 mod tests {

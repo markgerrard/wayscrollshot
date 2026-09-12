@@ -13,11 +13,15 @@ use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
 /// Runs one interactive capture session from region selection to final action.
 pub fn run(mut args: Args) -> Result<()> {
+    if args.cloud_list_json {
+        println!("{}", crate::cloud::panel_entries_json()?);
+        return Ok(());
+    }
     if args.cloud_gallery {
         if !is_wayland_session() {
             bail!("Wayland session required");
         }
-        return run_cloud_gallery(args.preview_width);
+        return run_cloud_gallery(args.preview_width, args.cloud_id);
     }
     let Some(socket) = crate::control_socket::CaptureSocket::open(args.toggle)? else {
         return Ok(());
@@ -26,15 +30,17 @@ pub fn run(mut args: Args) -> Result<()> {
         bail!("Wayland session required");
     }
     let region = if args.slurp_output().is_none() {
-        let Some((region, scrolling)) = crate::selection::select(
+        let Some((region, scrolling, auto_requested)) = crate::selection::select(
             !args.screenshot && !args.capture_bar,
             args.capture_bar,
             &args.select_mode,
+            args.auto_scroll,
         )?
         else {
             return Ok(());
         };
         args.screenshot = !scrolling;
+        args.auto_scroll = auto_requested;
         region
     } else {
         resolve_region(&args)?
@@ -214,7 +220,7 @@ fn finish_capture(
     Ok(())
 }
 
-fn run_cloud_gallery(preview_width: u32) -> Result<()> {
+fn run_cloud_gallery(preview_width: u32, initial_id: Option<i64>) -> Result<()> {
     let entries = crate::cloud::gallery_entries()?;
     if entries.is_empty() {
         bail!("No cloud captures yet. Use Cloud from a capture preview first.");
@@ -222,7 +228,9 @@ fn run_cloud_gallery(preview_width: u32) -> Result<()> {
     let width = preview_width.max(320);
     let (tx, rx) = mpsc::channel();
     let mut gallery = crate::overlay::LayerShellOverlay::new_gallery(tx, width)?;
-    let mut index = 0usize;
+    let mut index = initial_id
+        .and_then(|id| entries.iter().position(|entry| entry.id == id))
+        .unwrap_or(0);
     show_gallery_entry(&gallery, &entries[index], width)?;
 
     loop {

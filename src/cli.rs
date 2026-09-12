@@ -36,6 +36,14 @@ pub struct Args {
     #[arg(long)]
     pub cloud_gallery: bool,
 
+    /// Start the cloud gallery on a specific cached capture.
+    #[arg(long, requires = "cloud_gallery")]
+    pub cloud_id: Option<i64>,
+
+    /// Print cloud-gallery entries for the Omarchy panel.
+    #[arg(long, hide = true)]
+    pub cloud_list_json: bool,
+
     /// Initial selection for menu actions.
     #[arg(long, default_value = "area", value_parser = ["area", "window", "screen"])]
     pub select_mode: String,

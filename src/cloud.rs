@@ -13,7 +13,7 @@ use hmac::{Hmac, Mac};
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use rusqlite::{params, Connection};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::stitch::build_preview;
@@ -43,6 +43,18 @@ pub struct CloudEntry {
     pub local_path: Option<PathBuf>,
     pub width: u32,
     pub height: u32,
+    pub created_at: i64,
+    pub preview_expires_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct PanelEntry {
+    id: i64,
+    url: String,
+    thumbnail: String,
+    width: u32,
+    height: u32,
+    created_at: i64,
 }
 
 fn default_key_prefix() -> String {
@@ -149,6 +161,10 @@ pub fn upload(image: &Arc<RgbaImage>, local_path: &Path) -> Result<CloudEntry> {
         local_path: Some(local_path.to_owned()),
         width: image.width(),
         height: image.height(),
+        created_at: Utc::now().timestamp(),
+        preview_expires_at: Some(
+            Utc::now().timestamp() + (config.cache_ttl_hours.min(24 * 30) * 3600) as i64,
+        ),
     })
 }
 
@@ -309,7 +325,8 @@ pub fn gallery_entries() -> Result<Vec<CloudEntry>> {
         [Utc::now().timestamp()],
     )?;
     let mut statement = conn.prepare(
-        "SELECT id, url, local_path, width, height FROM cloud_items ORDER BY created_at DESC",
+        "SELECT id, url, local_path, width, height, created_at, preview_expires_at
+         FROM cloud_items ORDER BY created_at DESC",
     )?;
     let rows = statement.query_map([], |row| {
         let local: Option<String> = row.get(2)?;
@@ -319,10 +336,41 @@ pub fn gallery_entries() -> Result<Vec<CloudEntry>> {
             local_path: local.map(PathBuf::from),
             width: row.get::<_, i64>(3)? as u32,
             height: row.get::<_, i64>(4)? as u32,
+            created_at: row.get(5)?,
+            preview_expires_at: row.get(6)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+pub fn panel_entries_json() -> Result<String> {
+    let entries = gallery_entries()?;
+    let thumbnail_root = cache_root()?.join("thumbnails");
+    fs::create_dir_all(&thumbnail_root)?;
+    fs::set_permissions(&thumbnail_root, fs::Permissions::from_mode(0o700))?;
+    let now = Utc::now().timestamp();
+    let mut panel_entries = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let thumbnail_path = thumbnail_root.join(format!("{}.png", entry.id));
+        if !thumbnail_path.is_file() || entry.preview_expires_at.is_none_or(|expiry| expiry <= now)
+        {
+            let preview = gallery_preview(&entry, 360)?;
+            let image = RgbaImage::from_raw(preview.width, preview.height, preview.pixels)
+                .context("invalid panel thumbnail pixels")?;
+            fs::write(&thumbnail_path, encode_png(&Arc::new(image))?)?;
+            fs::set_permissions(&thumbnail_path, fs::Permissions::from_mode(0o600))?;
+        }
+        panel_entries.push(PanelEntry {
+            id: entry.id,
+            url: entry.url,
+            thumbnail: format!("file://{}", thumbnail_path.to_string_lossy()),
+            width: entry.width,
+            height: entry.height,
+            created_at: entry.created_at,
+        });
+    }
+    serde_json::to_string(&panel_entries).context("failed to encode cloud gallery")
 }
 
 pub fn gallery_preview(entry: &CloudEntry, width: u32) -> Result<PreviewImage> {
