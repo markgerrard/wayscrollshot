@@ -60,6 +60,7 @@ pub fn run(args: Args) -> Result<()> {
             if st.revision != revision {
                 revision = st.revision;
                 if let Some(img) = st.full_image.as_ref() {
+                    overlay.send(LayerMessage::Dimensions(img.width(), img.height()));
                     overlay.send(LayerMessage::Preview(build_preview(img, overlay.width)));
                 }
             }
@@ -112,6 +113,7 @@ pub fn run(args: Args) -> Result<()> {
             &img,
             args.preview_width,
         )));
+        review.send(LayerMessage::Dimensions(img.width(), img.height()));
         review.send(LayerMessage::Paused(true));
         let cancelled = loop {
             if socket.finish_requested() {

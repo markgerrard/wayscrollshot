@@ -42,6 +42,7 @@ struct Selector {
     height: u32,
     configured: bool,
     dirty: bool,
+    hover: Option<usize>,
     exit: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: bool,
@@ -122,23 +123,26 @@ impl Selector {
             }
         }
     }
-    fn press(&mut self) {
+    fn toolbar_hover(&self) -> Option<usize> {
         let (x, y) = self.position;
         let bx = (self.width as f64 - 440.) / 2.;
-        if y >= self.height as f64 - 84.
-            && y <= self.height as f64 - 36.
-            && x >= bx
-            && x < bx + 440.
-        {
-            if x < bx + 110. {
-                self.exit = true;
-            } else if x < bx + 280. {
-                self.choose_screen();
-            } else {
-                self.finish();
+        if y < self.height as f64 - 84. || y > self.height as f64 - 36. {
+            return None;
+        }
+        [(0., 106.), (110., 166.), (280., 160.)]
+            .iter()
+            .position(|(offset, w)| x >= bx + offset && x < bx + offset + w)
+    }
+    fn press(&mut self) {
+        if let Some(button) = self.toolbar_hover() {
+            match button {
+                0 => self.exit = true,
+                1 => self.choose_screen(),
+                _ => self.finish(),
             }
             return;
         }
+        let (x, y) = self.position;
         let mut edges = 0;
         if let Some(r) = &self.selection {
             let right = (r.x + r.w as i32) as f64;
@@ -228,7 +232,8 @@ impl Selector {
                 (x + w / 2., y + h),
                 (x + w, y + h),
             ] {
-                ui::rounded(&mut p, a - 4., b - 4., 8., 8., 2., [255, 255, 255, 255]);
+                ui::rounded(&mut p, a - 5., b - 5., 10., 10., 3., [25, 29, 40, 240]);
+                ui::rounded(&mut p, a - 3., b - 3., 6., 6., 2., [255, 255, 255, 255]);
             }
             let label = format!("{} × {}", r.w, r.h);
             let tw = ui::text_width(&label, 15.);
@@ -241,34 +246,53 @@ impl Selector {
             ui::rounded(&mut p, lx, ly, tw + 24., 28., 8., [28, 29, 34, 245]);
             ui::text(&mut p, &label, lx + 12., ly + 5., 15., [255, 255, 255, 255]);
         }
-        let title = if self.selection.is_some() {
-            "Adjust the edges, then capture"
-        } else {
-            "Drag to select an area"
+        let valid = self
+            .selection
+            .as_ref()
+            .is_some_and(|r| r.w >= 32 && r.h >= 160);
+        let title = match &self.selection {
+            Some(_) if valid => "Ready when you are",
+            Some(_) => "Select at least 32 × 160 pixels",
+            None => "What would you like to capture?",
         };
-        let hint = "Space  Window   F  Screen   Enter  Capture   Esc  Cancel";
-        let pw = 520.;
+        let subtitle = if self.selection.is_some() {
+            "Drag an edge or corner to refine your selection"
+        } else {
+            "Drag anywhere to select an area"
+        };
+        let pw = 540.;
         let px = (self.width as f32 - pw) / 2.;
-        ui::rounded(&mut p, px, 40., pw, 82., 16., [28, 29, 34, 245]);
+        ui::panel(&mut p, px, 40., pw, 118., 18.);
         ui::text(
             &mut p,
             title,
             (self.width as f32 - ui::text_width(title, 23.)) / 2.,
-            54.,
+            56.,
             23.,
-            [255, 255, 255, 255],
+            [249, 249, 252, 255],
         );
         ui::text(
             &mut p,
-            hint,
-            (self.width as f32 - ui::text_width(hint, 15.)) / 2.,
-            88.,
+            subtitle,
+            (self.width as f32 - ui::text_width(subtitle, 15.)) / 2.,
+            86.,
             15.,
-            [188, 190, 199, 255],
+            [177, 181, 195, 255],
+        );
+        ui::shortcuts(
+            &mut p,
+            &[
+                ("Space", "Window"),
+                ("F", "Screen"),
+                ("Enter", "Capture"),
+                ("Esc", "Cancel"),
+            ],
+            self.width as f32 / 2.,
+            119.,
         );
         let bx = (self.width as f32 - 440.) / 2.;
         let by = self.height as f32 - 84.;
-        ui::rounded(&mut p, bx - 8., by - 8., 456., 64., 18., [28, 29, 34, 245]);
+        ui::panel(&mut p, bx - 8., by - 8., 456., 64., 18.);
         for (offset, w, label, primary) in [
             (0., 106., "Cancel", false),
             (110., 166., "Full screen", false),
@@ -281,10 +305,22 @@ impl Selector {
                 w,
                 48.,
                 12.,
-                if primary {
-                    [67, 99, 154, 255]
+                if primary && !valid {
+                    [42, 45, 54, 255]
+                } else if self.hover
+                    == Some(if primary {
+                        2
+                    } else if offset == 0. {
+                        0
+                    } else {
+                        1
+                    })
+                {
+                    [79, 92, 120, 255]
+                } else if primary {
+                    [64, 106, 179, 255]
                 } else {
-                    [54, 55, 62, 255]
+                    [43, 45, 54, 255]
                 },
             );
             ui::icon(
@@ -296,18 +332,18 @@ impl Selector {
                 } else {
                     5
                 },
-                bx + offset + 8.,
+                bx + offset + (w - ui::text_width(label, 17.) - 30.) / 2.,
                 by + 14.,
                 20,
             );
             ui::text(
                 &mut p,
                 label,
-                bx + offset + 8. + (w - ui::text_width(label, 17.)) / 2.,
+                bx + offset + (w - ui::text_width(label, 17.) - 30.) / 2. + 30.,
                 by + 14.,
                 17.,
-                if primary {
-                    [255, 255, 255, 255]
+                if primary && !valid {
+                    [124, 129, 145, 255]
                 } else {
                     [245, 245, 247, 255]
                 },
@@ -577,6 +613,11 @@ impl PointerHandler for Selector {
             }
 
             self.position = event.position;
+            let hover = self.toolbar_hover();
+            if hover != self.hover {
+                self.hover = hover;
+                self.dirty = true;
+            }
             match event.kind {
                 PointerEventKind::Press { button: 272, .. } => {
                     self.press();
@@ -719,6 +760,7 @@ pub fn select() -> Result<Option<Region>> {
         height: output.height as u32,
         configured: false,
         dirty: false,
+        hover: None,
         exit: false,
         keyboard: None,
         keyboard_focus: false,

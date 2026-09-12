@@ -131,3 +131,45 @@ pub fn icon(p: &mut Pixmap, index: usize, x: f32, y: f32, size: u32) {
         dst[3] = (src[3] as f32 + dst[3] as f32 * (1. - a)) as u8;
     }
 }
+
+/// Hairline edge and soft layered shadow keep floating panels distinct.
+pub fn panel(p: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+    for spread in (1..=5).rev() {
+        let d = spread as f32;
+        rounded(
+            p,
+            x - d,
+            y - d + 3.,
+            w + 2. * d,
+            h + 2. * d,
+            radius + d,
+            [0, 0, 0, 8],
+        );
+    }
+    rounded(p, x, y, w, h, radius, [85, 88, 100, 235]);
+    rounded(
+        p,
+        x + 1.,
+        y + 1.,
+        w - 2.,
+        h - 2.,
+        radius - 1.,
+        [28, 29, 35, 252],
+    );
+}
+
+pub fn shortcuts(p: &mut Pixmap, items: &[(&str, &str)], center: f32, y: f32) {
+    let total: f32 = items
+        .iter()
+        .map(|(key, label)| text_width(key, 12.) + 16. + 8. + text_width(label, 14.) + 20.)
+        .sum::<f32>()
+        - 20.;
+    let mut x = center - total / 2.;
+    for (key, label) in items {
+        let kw = text_width(key, 12.) + 16.;
+        rounded(p, x, y, kw, 24., 5., [58, 60, 70, 255]);
+        text(p, key, x + 8., y + 5., 12., [238, 239, 245, 255]);
+        text(p, label, x + kw + 8., y + 4., 14., [186, 189, 201, 255]);
+        x += kw + 8. + text_width(label, 14.) + 20.;
+    }
+}

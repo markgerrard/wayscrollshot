@@ -83,4 +83,5 @@ pub enum UserCommand {
 pub enum LayerMessage {
     Preview(PreviewImage),
     Paused(bool),
+    Dimensions(u32, u32),
 }

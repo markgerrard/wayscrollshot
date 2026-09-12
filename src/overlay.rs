@@ -44,7 +44,7 @@ use placement::{
 };
 
 const CONTROL_BUTTON_COUNT: u32 = 4;
-const HEADER_HEIGHT: u32 = 36;
+const HEADER_HEIGHT: u32 = 54;
 const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT + HEADER_HEIGHT;
 const PREVIEW_GAP: i32 = 8;
 
@@ -135,6 +135,7 @@ struct LayerPreview {
     region: Region,
     fixed_area: Option<Region>,
     review: bool,
+    dimensions: Option<(u32, u32)>,
     configured: bool,
     exit: bool,
     preview: Option<PreviewImage>,
@@ -293,7 +294,32 @@ impl LayerPreview {
             "Scrolling capture"
         };
         if self.width >= 180 {
-            crate::ui::text(&mut header, label, 12., 10., 15., [243, 243, 246, 255]);
+            crate::ui::rounded(
+                &mut header,
+                12.,
+                13.,
+                6.,
+                6.,
+                3.,
+                if self.review {
+                    [123, 180, 157, 255]
+                } else if self.paused {
+                    [227, 181, 112, 255]
+                } else {
+                    [128, 167, 237, 255]
+                },
+            );
+            crate::ui::text(&mut header, label, 26., 9., 15., [243, 243, 246, 255]);
+            if let Some((w, h)) = self.dimensions {
+                crate::ui::text(
+                    &mut header,
+                    &format!("{w} × {h} px"),
+                    12.,
+                    31.,
+                    12.,
+                    [153, 160, 177, 255],
+                );
+            }
         }
         crate::ui::to_canvas(&header, canvas, self.width, 0);
 
@@ -781,6 +807,7 @@ fn run_layer_shell_overlay(
         max_height: area.as_ref().map_or(region.h.min(480), |a| a.h),
         region,
         review: area.is_none(),
+        dimensions: None,
         fixed_area: area,
         configured: false,
         exit: false,
@@ -807,6 +834,10 @@ fn run_layer_shell_overlay(
             match rx.try_recv() {
                 Ok(LayerMessage::Preview(preview_img)) => {
                     preview.update_preview(&qh, preview_img);
+                }
+                Ok(LayerMessage::Dimensions(w, h)) => {
+                    preview.dimensions = Some((w, h));
+                    preview.request_redraw(&qh);
                 }
                 Ok(LayerMessage::Paused(paused)) => {
                     preview.set_paused(&qh, paused);
