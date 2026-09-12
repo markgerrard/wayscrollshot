@@ -1,6 +1,21 @@
 # wayscrollshot
 
-A scrolling screenshot tool for Wayland that captures and stitches images in real-time as you scroll.
+An Omarchy / Hyprland fork of [jswysnemc/wayscrollshot](https://github.com/jswysnemc/wayscrollshot), with automatic scrolling, safer stitching, and a native capture UI.
+
+## This fork
+
+- Drag to select, press **Space** to select the window under the pointer, or use **F / Full screen** for the monitor where selection started.
+- Adjust any edge or corner before pressing **Enter / Capture**. In browsers, lower the top edge to exclude tabs and the address bar.
+- Dimmed capture mask, a bounded live preview that follows new content, and labeled controls with ImageGen artwork.
+- Automatic scrolling advances relative to crop height and learns the application's scroll distance. Uncertain overlaps retry after settling, then backtrack with smaller jumps.
+- Moving the pointer outside the capture area pauses automatic scrolling; returning resumes it. Finishing remains available while paused.
+- The preview stays outside the capture. When no space is available (including full screen), it is omitted during capture and shown for final review. Run `wayscrollshot --toggle` to finish.
+
+The native selector and automatic scrolling use `hyprctl`; explicit geometry remains available for other compatible Wayland compositors. Only the monitor under the pointer when selection opens is used by the native selector.
+
+On this Omarchy setup, **Super + R** starts/finishes manual scrolling capture and **Super + Alt + R** starts/finishes automatic capture. These shortcuts are local configuration, not installed by the build.
+
+The screenshots and distribution instructions below originated upstream; prebuilt upstream releases do not contain these fork changes.
 ![preview](./preview.png)
 
 [中文文档](README_CN.md)
@@ -68,9 +83,11 @@ The algorithm finds where Frame 2's top matches Frame 1's content, then appends 
 
 | Tool / Library | Purpose | Required |
 |----------------|---------|----------|
-| `slurp` | Region selection | Unless `REGION` is provided |
+| Hyprland / `hyprctl` | Native region/window selection and automatic scrolling | Unless using explicit geometry with manual scrolling |
+| Fontconfig (`fc-match`) and a sans-serif font | UI text | Yes |
+| `slurp` | Optional external region selection | No |
 | `grim` | Screen capture | Yes |
-| OpenCV | Default stitching algorithm | Yes |
+| OpenCV | Optional stitching algorithms linked at build time | Yes |
 | `wl-copy` | Clipboard (Wayland) | For clipboard feature |
 | `xclip` | Clipboard (X11 fallback) | Alternative |
 
@@ -106,7 +123,7 @@ The Debian packages are built separately for each Ubuntu release so OpenCV runti
 
 ```bash
 # Install runtime and build dependencies (Arch Linux)
-sudo pacman -S slurp grim wl-clipboard opencv clang libxkbcommon
+sudo pacman -S grim wl-clipboard opencv clang libxkbcommon fontconfig ttf-liberation
 
 # Build
 cargo build --release
@@ -165,8 +182,8 @@ wayscrollshot "$(slurp)"
 slurp | wayscrollshot -
 
 # Use different stitching algorithms
-wayscrollshot -a opencv-orb  # Default: ORB feature matching + RANSAC
-wayscrollshot -a col-sample  # Fast column sampling
+wayscrollshot -a opencv-orb  # ORB feature matching + RANSAC
+wayscrollshot -a col-sample  # Default: verified column sampling
 wayscrollshot -a template    # Template matching (more accurate)
 wayscrollshot -a edge        # Edge detection (for transparent backgrounds)
 wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
@@ -181,10 +198,18 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 | `-c, --clipboard` | Copy to clipboard instead of saving | false |
 | `--no-preview` | Disable preview window | false |
 | `--no-border` | Disable region border overlay | false |
-| `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | opencv-orb |
-| `REGION` | Existing slurp/grim geometry, for example `10,20 300x400`; use `-` to read stdin | Run `slurp` interactively |
+| `-a, --algorithm <ALG>` | Stitching algorithm: `opencv-orb`, `col-sample`, `template`, `edge`, `fast` | col-sample |
+| `REGION` | Existing slurp/grim geometry, for example `10,20 300x400`; use `-` to read stdin | Native selector |
 
 ### Controls
+
+During selection: drag to create an area; Space selects the window under the pointer; F selects the screen; drag the handles to resize; Enter starts capture; Esc cancels. A scrolling region must be at least 32 × 160 pixels.
+
+```bash
+wayscrollshot --auto-scroll
+wayscrollshot --toggle  # finish the running capture (or start if none exists)
+```
+
 
 **Mouse:**
 - Click buttons in the control bar
@@ -192,10 +217,10 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 **Control bar buttons:**
 | Button | Action |
 |--------|--------|
-| `S` (Save) | Save image and exit |
-| `C` (Copy) | Copy to clipboard and exit |
-| `P` (Pause/Resume) | Pause or resume capture |
-| `X` (Cancel) | Cancel capture and exit |
+| Done / Save | Finish, save image and exit |
+| Copy | Copy to clipboard and exit |
+| Pause / Resume (live only) | Pause or resume capture |
+| Cancel | Cancel capture and exit |
 
 **Keyboard (when overlay is focused):**
 | Key | Action |
@@ -219,13 +244,13 @@ wayscrollshot -a fast        # FAST corner + HNSW index (experimental)
 
 5. **Vertical scrolling only**: Horizontal scrolling is not currently supported.
 
-6. **Fixed header/footer**: If the page has fixed headers or footers, they will be captured repeatedly. Consider selecting a region that excludes them.
+6. **Fixed header/footer**: Overlap joins reduce repeated sticky content. Selecting just the scrolling content is still preferable, particularly with large toolbars or animation.
 
 ## Troubleshooting
 
-### "slurp selection failed"
-- Ensure `slurp` is installed and in PATH
-- Check if you're running on Wayland
+### Native selector cannot read desktop geometry
+- Ensure you are running Hyprland and `hyprctl` is available.
+- On other layer-shell compositors, pass explicit geometry or use `wayscrollshot "$(slurp)"`.
 
 ### "layer-shell not available"
 - Your compositor doesn't support `wlr-layer-shell-unstable-v1`

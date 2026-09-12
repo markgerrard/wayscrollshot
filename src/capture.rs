@@ -6,24 +6,6 @@ use image::RgbaImage;
 
 use crate::types::Region;
 
-/// Prompts the user to select a capture region with `slurp`.
-pub fn select_region() -> Result<Region> {
-    let output = Command::new("slurp")
-        .arg("-f")
-        .arg("%x,%y %wx%h")
-        .output()
-        .context("failed to run slurp")?;
-    if !output.status.success() {
-        bail!("slurp exited with non-zero status");
-    }
-    let raw = String::from_utf8(output.stdout)?.trim().to_string();
-    if raw.is_empty() {
-        bail!("slurp returned empty selection");
-    }
-    log::debug!("slurp output: {}", raw);
-    region_from_slurp_output(&raw)
-}
-
 /// Parses an existing `slurp` geometry output.
 pub fn region_from_slurp_output(raw: &str) -> Result<Region> {
     let raw = raw.trim();

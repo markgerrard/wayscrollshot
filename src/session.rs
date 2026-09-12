@@ -5,9 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
 
-use crate::capture::{
-    capture_frame, read_region_from_stdin, region_from_slurp_output, select_region,
-};
+use crate::capture::{capture_frame, read_region_from_stdin, region_from_slurp_output};
 use crate::cli::{Algorithm, Args};
 use crate::output::{copy_to_clipboard, save_image};
 use crate::stitch::{build_preview, init_opencv_runtime, MatchConfig, StitchOutcome, Stitcher};
@@ -21,7 +19,14 @@ pub fn run(args: Args) -> Result<()> {
     if !is_wayland_session() {
         bail!("Wayland session required");
     }
-    let region = resolve_region(&args)?;
+    let region = if args.slurp_output().is_none() {
+        let Some(region) = crate::selection::select()? else {
+            return Ok(());
+        };
+        region
+    } else {
+        resolve_region(&args)?
+    };
     anyhow::ensure!(
         region.w >= 32 && region.h >= 160,
         "Select an area at least 32 pixels wide and 160 pixels high"
@@ -148,7 +153,7 @@ fn resolve_region(args: &Args) -> Result<Region> {
     match args.slurp_output() {
         Some(raw) if raw.trim() == "-" => read_region_from_stdin().context("failed to read region"),
         Some(raw) => region_from_slurp_output(&raw),
-        None => select_region(),
+        None => unreachable!("interactive selection is handled above"),
     }
 }
 

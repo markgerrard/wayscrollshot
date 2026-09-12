@@ -35,7 +35,7 @@ use crate::constants::CONTROL_BAR_HEIGHT;
 use crate::types::{LayerMessage, PreviewImage, Region, UserCommand};
 
 mod drawing;
-mod placement;
+pub(crate) mod placement;
 
 use drawing::{blit_preview_bottom, draw_control_bar};
 use placement::{
@@ -44,7 +44,8 @@ use placement::{
 };
 
 const CONTROL_BUTTON_COUNT: u32 = 4;
-const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT;
+const HEADER_HEIGHT: u32 = 36;
+const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT + HEADER_HEIGHT;
 const PREVIEW_GAP: i32 = 8;
 
 pub struct LayerShellOverlay {
@@ -133,6 +134,7 @@ struct LayerPreview {
     max_height: u32,
     region: Region,
     fixed_area: Option<Region>,
+    review: bool,
     configured: bool,
     exit: bool,
     preview: Option<PreviewImage>,
@@ -165,10 +167,12 @@ impl LayerPreview {
             .fixed_area
             .as_ref()
             .map_or(preview.width.max(1), |a| a.w);
-        let max_preview_height = self.max_height.saturating_sub(CONTROL_BAR_HEIGHT);
+        let max_preview_height = self
+            .max_height
+            .saturating_sub(CONTROL_BAR_HEIGHT + HEADER_HEIGHT);
         let display_preview_height = preview.height.min(max_preview_height);
         let target_height = display_preview_height
-            .saturating_add(CONTROL_BAR_HEIGHT)
+            .saturating_add(CONTROL_BAR_HEIGHT + HEADER_HEIGHT)
             .max(1);
         (target_width, target_height)
     }
@@ -262,10 +266,36 @@ impl LayerPreview {
                     self.width
                 );
             } else {
-                let available_height = self.height.saturating_sub(CONTROL_BAR_HEIGHT);
-                blit_preview_bottom(canvas, self.width, available_height, preview);
+                let available_height = self
+                    .height
+                    .saturating_sub(CONTROL_BAR_HEIGHT + HEADER_HEIGHT);
+                let offset = (self.width * HEADER_HEIGHT * 4) as usize;
+                blit_preview_bottom(&mut canvas[offset..], self.width, available_height, preview);
             }
         }
+
+        // Header remains fixed while the preview follows the newest captured rows.
+        let mut header = tiny_skia::Pixmap::new(self.width, HEADER_HEIGHT).unwrap();
+        crate::ui::rounded(
+            &mut header,
+            0.,
+            0.,
+            self.width as f32,
+            HEADER_HEIGHT as f32,
+            10.,
+            [27, 28, 33, 250],
+        );
+        let label = if self.review {
+            "Capture ready"
+        } else if self.paused {
+            "Paused"
+        } else {
+            "Scrolling capture"
+        };
+        if self.width >= 180 {
+            crate::ui::text(&mut header, label, 12., 10., 15., [243, 243, 246, 255]);
+        }
+        crate::ui::to_canvas(&header, canvas, self.width, 0);
 
         // Draw control bar at the bottom
         let bar_y = self.height.saturating_sub(CONTROL_BAR_HEIGHT);
@@ -276,6 +306,7 @@ impl LayerPreview {
             bar_y,
             self.paused,
             self.hover_button,
+            self.review,
         );
 
         self.layer
@@ -311,16 +342,17 @@ impl LayerPreview {
         }
 
         let x = position.0 as u32;
-        let segment = self.width / CONTROL_BUTTON_COUNT;
+        let count = if self.review { 3 } else { CONTROL_BUTTON_COUNT };
+        let segment = self.width / count;
         let index = if segment == 0 {
             0
         } else {
-            (x / segment).min(CONTROL_BUTTON_COUNT - 1)
+            (x / segment).min(count - 1)
         };
         let command = match index {
             0 => UserCommand::Save,
             1 => UserCommand::Copy,
-            2 => UserCommand::TogglePause,
+            2 if !self.review => UserCommand::TogglePause,
             _ => UserCommand::Cancel,
         };
         self.handle_command(qh, command);
@@ -338,11 +370,12 @@ impl LayerPreview {
             && position.0 < self.width as f64
         {
             let x = position.0 as u32;
-            let segment = self.width / CONTROL_BUTTON_COUNT;
+            let count = if self.review { 3 } else { CONTROL_BUTTON_COUNT };
+            let segment = self.width / count;
             let index = if segment == 0 {
                 0
             } else {
-                (x / segment).min(CONTROL_BUTTON_COUNT - 1)
+                (x / segment).min(count - 1)
             };
             Some(index)
         } else {
@@ -583,7 +616,7 @@ impl KeyboardHandler for LayerPreview {
                 "s" | "S" => self.handle_command(qh, UserCommand::Save),
                 "c" | "C" => self.handle_command(qh, UserCommand::Copy),
                 "q" | "Q" => self.handle_command(qh, UserCommand::Cancel),
-                " " => self.handle_command(qh, UserCommand::TogglePause),
+                " " if !self.review => self.handle_command(qh, UserCommand::TogglePause),
                 _ => {}
             }
         }
@@ -747,6 +780,7 @@ fn run_layer_shell_overlay(
         height: INITIAL_HEIGHT,
         max_height: area.as_ref().map_or(region.h.min(480), |a| a.h),
         region,
+        review: area.is_none(),
         fixed_area: area,
         configured: false,
         exit: false,

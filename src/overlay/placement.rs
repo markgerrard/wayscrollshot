@@ -364,7 +364,7 @@ pub(crate) fn live_preview_area(
     ];
     slots
         .into_iter()
-        .filter(|(_, _, w, h)| *w >= 96 && *h >= 96)
+        .filter(|(_, _, w, h)| *w >= 96 && *h >= (super::INITIAL_HEIGHT + 32) as i32)
         .max_by_key(|(_, _, w, h)| (*w).min(desired_width as i32) * (*h).min(480))
         .map(|(x, y, w, h)| Region {
             raw: String::new(),
@@ -400,6 +400,24 @@ mod live_tests {
         )
         .unwrap();
         assert!(p.y + p.h as i32 <= r.y);
+    }
+    #[test]
+    fn narrow_strip_cannot_fit_header_controls_and_preview() {
+        let r = Region {
+            raw: String::new(),
+            x: 0,
+            y: 116,
+            w: 1920,
+            h: 964,
+        };
+        let output = OutputRect {
+            id: 0,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        assert!(live_preview_area(&r, 280, &[output]).is_none());
     }
     #[test]
     fn fullscreen_has_no_safe_live_preview() {

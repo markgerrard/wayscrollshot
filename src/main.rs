@@ -7,9 +7,11 @@ mod opencv_compat;
 mod output;
 mod overlay;
 mod region_overlay;
+mod selection;
 mod session;
 mod stitch;
 mod types;
+mod ui;
 
 use anyhow::Result;
 
