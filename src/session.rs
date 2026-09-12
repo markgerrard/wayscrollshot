@@ -10,144 +10,99 @@ use crate::capture::{
 };
 use crate::cli::{Algorithm, Args};
 use crate::output::{copy_to_clipboard, save_image};
-use crate::overlay::LayerShellOverlay;
-use crate::region_overlay::RegionOverlay;
 use crate::stitch::{build_preview, init_opencv_runtime, MatchConfig, StitchOutcome, Stitcher};
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
-const CAPTURE_INTERVAL: Duration = Duration::from_millis(45);
-const SIGNATURE_COLS: u32 = 18;
-const SIGNATURE_ROWS: u32 = 24;
-const DUPLICATE_AVG_DIFF: f32 = 1.1;
-const DUPLICATE_MAX_DIFF: u8 = 4;
-
 /// Runs one interactive capture session from region selection to final action.
 pub fn run(args: Args) -> Result<()> {
-    if !is_wayland_session() {
-        bail!("Wayland session required (X11 not supported)");
-    }
-
-    let region = resolve_region(&args)?;
-    log::info!(
-        "Capture region: {},{} {}x{}",
-        region.x,
-        region.y,
-        region.w,
-        region.h
-    );
-
-    let mut region_overlay = if args.no_border {
-        None
-    } else {
-        Some(RegionOverlay::new(region.clone())?)
+    let Some(socket) = crate::control_socket::CaptureSocket::open(args.toggle)? else {
+        return Ok(());
     };
-
+    if !is_wayland_session() {
+        bail!("Wayland session required");
+    }
+    let region = resolve_region(&args)?;
+    anyhow::ensure!(
+        region.w >= 32 && region.h >= 160,
+        "Select an area at least 32 pixels wide and 160 pixels high"
+    );
     let control = Arc::new(Control::new());
     let state = Arc::new(Mutex::new(StitchState::default()));
-
-    let (command_tx, command_rx) = mpsc::channel();
-
-    let mut layer_overlay = if args.no_preview {
-        None
-    } else {
-        Some(LayerShellOverlay::new(
-            command_tx.clone(),
-            region.clone(),
-            args.preview_width,
-        )?)
-    };
-
-    let preview_tx = layer_overlay.as_ref().and_then(|o| o.sender());
-    let algorithm = args.algorithm;
+    let (tx, rx) = mpsc::channel();
+    // No surfaces are mapped while capturing. This also works for full-width regions.
     let worker = spawn_capture_worker(
-        region,
+        region.clone(),
         control.clone(),
         state.clone(),
-        preview_tx,
-        args.preview_width,
-        algorithm,
+        args.clone(),
+        tx,
     );
-
-    let result = run_session(
-        control,
-        state,
-        worker,
-        &mut layer_overlay,
-        command_rx,
-        &args,
-    );
-
-    if let Some(ref mut overlay) = region_overlay {
-        overlay.stop();
+    let reason = loop {
+        if socket.finish_requested() {
+            break "Capture finished".to_string();
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(reason) => break reason,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => break "Capture worker stopped unexpectedly".to_string(),
+        }
+    };
+    control.stop();
+    worker
+        .join()
+        .map_err(|_| anyhow!("capture worker panicked"))?;
+    let img = take_snapshot(&state).context(reason.clone())?;
+    let mut clipboard = args.clipboard;
+    if !args.no_preview {
+        let (tx, rx) = mpsc::channel();
+        let mut review = crate::overlay::LayerShellOverlay::new(tx, region, args.preview_width)?;
+        review.send(LayerMessage::Preview(build_preview(
+            &img,
+            args.preview_width,
+        )));
+        review.send(LayerMessage::Paused(true));
+        let cancelled = loop {
+            if socket.finish_requested() {
+                break false;
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(UserCommand::Save) => {
+                    clipboard = false;
+                    break false;
+                }
+                Ok(UserCommand::Copy) => {
+                    clipboard = true;
+                    break false;
+                }
+                Ok(UserCommand::Cancel) | Err(mpsc::RecvTimeoutError::Disconnected) => break true,
+                _ => {}
+            }
+        };
+        review.stop();
+        if cancelled {
+            return Ok(());
+        }
     }
-    result
+    let message = if clipboard {
+        copy_to_clipboard(img)?;
+        format!("{reason}. Copied to clipboard")
+    } else {
+        let path = save_image(img, args.output)?;
+        println!("{}", path.display());
+        format!("{reason}. Saved to {}", path.display())
+    };
+    let _ = std::process::Command::new("notify-send")
+        .args(["Scrolling capture", &message])
+        .status();
+    Ok(())
 }
 
 fn resolve_region(args: &Args) -> Result<Region> {
     match args.slurp_output() {
-        Some(raw) if raw.trim() == "-" => {
-            read_region_from_stdin().context("failed to read slurp selection from stdin")
-        }
-        Some(raw) => region_from_slurp_output(&raw).context("invalid slurp selection"),
-        None => select_region().context("slurp selection failed"),
+        Some(raw) if raw.trim() == "-" => read_region_from_stdin().context("failed to read region"),
+        Some(raw) => region_from_slurp_output(&raw),
+        None => select_region(),
     }
-}
-
-/// Handles overlay commands and finalization while capture worker is running.
-fn run_session(
-    control: Arc<Control>,
-    state: Arc<Mutex<StitchState>>,
-    worker: thread::JoinHandle<()>,
-    layer_overlay: &mut Option<LayerShellOverlay>,
-    command_rx: mpsc::Receiver<UserCommand>,
-    args: &Args,
-) -> Result<()> {
-    let mut paused = false;
-
-    while let Ok(command) = command_rx.recv() {
-        match command {
-            UserCommand::TogglePause => {
-                control.toggle_pause();
-                paused = !paused;
-                if let Some(ref overlay) = layer_overlay {
-                    overlay.send(LayerMessage::Paused(paused));
-                }
-            }
-            UserCommand::Save => {
-                match take_snapshot(&state).and_then(|img| save_image(img, args.output.clone())) {
-                    Ok(path) => {
-                        log::info!("Saved to {}", path.display());
-                        control.stop();
-                        break;
-                    }
-                    Err(err) => {
-                        log::error!("Save failed: {err}");
-                    }
-                }
-            }
-            UserCommand::Copy => match take_snapshot(&state).and_then(copy_to_clipboard) {
-                Ok(()) => {
-                    log::info!("Copied to clipboard");
-                    control.stop();
-                    break;
-                }
-                Err(err) => {
-                    log::error!("Copy failed: {err}");
-                }
-            },
-            UserCommand::Cancel => {
-                control.stop();
-                break;
-            }
-        }
-    }
-
-    control.stop();
-    if let Some(ref mut overlay) = layer_overlay {
-        overlay.stop();
-    }
-    let _ = worker.join();
-    Ok(())
 }
 
 /// Returns the latest stitched image snapshot.
@@ -175,121 +130,135 @@ fn spawn_capture_worker(
     region: Region,
     control: Arc<Control>,
     state: Arc<Mutex<StitchState>>,
-    preview_tx: Option<mpsc::Sender<LayerMessage>>,
-    preview_width: u32,
-    algorithm: Algorithm,
+    args: Args,
+    done: mpsc::Sender<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let config = match algorithm {
-            Algorithm::OpenCvOrb => MatchConfig {
-                min_overlap: 120,
-                accept_diff: 3.5,
-                min_append: 10,
-                approx_diff: 1.0,
-                match_width: preview_width.max(200),
-                algorithm,
-            },
-            _ => MatchConfig {
-                min_overlap: 100,
-                accept_diff: 5.0,
-                min_append: 15,
-                approx_diff: 1.0,
-                match_width: preview_width.max(200),
-                algorithm,
-            },
+        let result = capture_loop(&region, &control, &state, &args);
+        let message = match result {
+            Ok(msg) => msg,
+            Err(err) => format!("Stopped: {err}"),
         };
-        if matches!(algorithm, Algorithm::OpenCvOrb) {
-            init_opencv_runtime();
+        log::info!("{message}");
+        let _ = done.send(message);
+    })
+}
+
+fn capture_loop(
+    region: &Region,
+    control: &Control,
+    state: &Arc<Mutex<StitchState>>,
+    args: &Args,
+) -> Result<String> {
+    let mut auto = if args.auto_scroll {
+        Some(crate::auto_scroll::AutoScroller::new(region)?)
+    } else {
+        None
+    };
+    let config = MatchConfig {
+        min_overlap: (region.h / 3).max(80),
+        accept_diff: 3.5,
+        min_append: 2,
+        approx_diff: 0.5,
+        algorithm: args.algorithm,
+        match_width: args.preview_width.max(200),
+    };
+    if matches!(args.algorithm, Algorithm::OpenCvOrb) {
+        init_opencv_runtime();
+    }
+    let mut stitcher = Stitcher::new(config);
+    let mut candidate: Option<RgbaImage> = None;
+    let mut stable_since = Instant::now();
+    let mut submitted = false;
+    let mut unchanged_steps = 0;
+    let started = Instant::now();
+    let mut last_accepted = Instant::now();
+    while control.is_running() {
+        thread::sleep(Duration::from_millis(100));
+        if auto.is_some() && started.elapsed() > Duration::from_secs(180) {
+            return Ok("Time limit reached; partial capture".into());
         }
-        let mut stitcher = Stitcher::new(config);
-        let mut last_capture_end: Option<Instant> = None;
-        let mut last_signature: Option<Vec<u8>> = None;
-
-        while control.is_running() {
-            if control.is_paused() {
-                update_status(&state, "Paused".to_string(), None, None, None);
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
+        let frame = capture_frame(region)?;
+        let stable = candidate
+            .as_ref()
+            .is_some_and(|prev| frames_settled(prev, &frame));
+        if !stable {
+            stable_since = Instant::now();
+            submitted = false;
+        }
+        candidate = Some(frame.clone());
+        if !stable || stable_since.elapsed() < Duration::from_millis(args.settle_ms) || submitted {
+            if auto.is_some() && last_accepted.elapsed() > Duration::from_secs(10) {
+                return Ok("Page did not settle; partial capture".into());
             }
-
-            if let Some(last) = last_capture_end {
-                let elapsed = last.elapsed();
-                if elapsed < CAPTURE_INTERVAL {
-                    std::thread::sleep(CAPTURE_INTERVAL - elapsed);
-                }
+            continue;
+        }
+        submitted = true;
+        let outcome = stitcher.push_frame(frame);
+        if let StitchOutcome::Appended { added } = &outcome {
+            log::info!("Appended {added} pixels");
+        }
+        match outcome {
+            StitchOutcome::FirstFrame | StitchOutcome::Appended { .. } => {
+                unchanged_steps = 0;
+                last_accepted = Instant::now();
+                apply_state_update(
+                    state,
+                    &stitcher,
+                    "Captured settled content".into(),
+                    None,
+                    args.preview_width,
+                );
             }
-
-            match capture_frame(&region) {
-                Ok(frame) => {
-                    last_capture_end = Some(Instant::now());
-
-                    let signature = frame_signature(&frame, SIGNATURE_COLS, SIGNATURE_ROWS);
-                    if let Some(previous) = last_signature.as_ref() {
-                        if is_duplicate_signature(previous, &signature) {
-                            update_status(
-                                &state,
-                                "Waiting for scroll".to_string(),
-                                Some(&stitcher),
-                                None,
-                                None,
-                            );
-                            continue;
-                        }
-                    }
-                    last_signature = Some(signature);
-
-                    let outcome = stitcher.push_frame(frame);
-                    match outcome {
-                        StitchOutcome::FirstFrame => {
-                            apply_state_update(
-                                &state,
-                                &stitcher,
-                                "First frame captured".to_string(),
-                                preview_tx.as_ref(),
-                                preview_width,
-                            );
-                        }
-                        StitchOutcome::Appended { added } => {
-                            apply_state_update(
-                                &state,
-                                &stitcher,
-                                format!("Appended {added} px"),
-                                preview_tx.as_ref(),
-                                preview_width,
-                            );
-                        }
-                        StitchOutcome::NoProgress => {
-                            update_status(
-                                &state,
-                                "No scroll detected".to_string(),
-                                Some(&stitcher),
-                                None,
-                                None,
-                            );
-                        }
-                        StitchOutcome::NoMatch => {
-                            update_status(
-                                &state,
-                                "No overlap match".to_string(),
-                                Some(&stitcher),
-                                None,
-                                None,
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    update_status(
-                        &state,
-                        "Capture error".to_string(),
-                        Some(&stitcher),
-                        None,
-                        Some(err.to_string()),
+            StitchOutcome::NoProgress => {
+                unchanged_steps += 1;
+                last_accepted = Instant::now();
+            }
+            StitchOutcome::NoMatch => {
+                if auto.is_some() {
+                    return Ok(
+                        "Uncertain overlap; stopped to avoid a broken join (partial capture)"
+                            .into(),
                     );
                 }
+                log::warn!("Overlap rejected; scroll back toward the last accepted content");
             }
         }
-    })
+        if let Some(scroller) = auto.as_mut() {
+            if unchanged_steps >= 4 {
+                return Ok("Reached end of scrolling content".into());
+            }
+            if stitcher.stats().total_height as u64 * region.w as u64 * 4 > 192 * 1024 * 1024 {
+                return Ok("Image size limit reached; partial capture".into());
+            }
+            scroller.step()?;
+            // Allow scroll animations to start before looking for a settled frame.
+            thread::sleep(Duration::from_millis(180));
+            candidate = None;
+            submitted = false;
+            stable_since = Instant::now();
+        }
+    }
+    Ok("Capture finished".into())
+}
+
+fn frames_settled(a: &RgbaImage, b: &RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return false;
+    }
+    let mut changed = 0usize;
+    let mut total = 0usize;
+    for y in (0..a.height()).step_by(3) {
+        for x in (0..a.width()).step_by(3) {
+            let p = a.get_pixel(x, y);
+            let q = b.get_pixel(x, y);
+            if (0..3).any(|c| p[c].abs_diff(q[c]) > 3) {
+                changed += 1;
+            }
+            total += 1;
+        }
+    }
+    total > 0 && changed as f64 / (total as f64) < 0.002
 }
 
 /// Applies a successful stitch update and publishes preview frame.
@@ -315,62 +284,20 @@ fn apply_state_update(
     st.revision = st.revision.wrapping_add(1);
 }
 
-/// Updates session status/message without appending new content.
-fn update_status(
-    state: &Arc<Mutex<StitchState>>,
-    message: String,
-    stitcher: Option<&Stitcher>,
-    preview: Option<crate::types::PreviewImage>,
-    error: Option<String>,
-) {
-    let mut st = state.lock().expect("state lock");
-    if let Some(stitcher) = stitcher {
-        st.full_image = stitcher.full_image();
-        st.stats = stitcher.stats();
-    }
-    if preview.is_some() {
-        st.preview = preview;
-    }
-    st.last_message = message;
-    st.last_error = error;
-    st.revision = st.revision.wrapping_add(1);
-}
-
-fn frame_signature(frame: &RgbaImage, cols: u32, rows: u32) -> Vec<u8> {
-    let width = frame.width().max(1);
-    let height = frame.height().max(1);
-    let cols = cols.max(1);
-    let rows = rows.max(1);
-    let mut signature = Vec::with_capacity((cols * rows) as usize);
-
-    for row in 0..rows {
-        let y = ((row * height) / rows).min(height - 1);
-        for col in 0..cols {
-            let x = ((col * width) / cols).min(width - 1);
-            let pixel = frame.get_pixel(x, y);
-            let gray =
-                (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as u8;
-            signature.push(gray);
+#[cfg(test)]
+mod settling_tests {
+    use super::*;
+    use image::Rgba;
+    #[test]
+    fn waits_for_local_animation_to_settle() {
+        let a = RgbaImage::from_pixel(300, 300, Rgba([255, 255, 255, 255]));
+        let mut b = a.clone();
+        for y in 100..150 {
+            for x in 100..200 {
+                b.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
         }
+        assert!(!frames_settled(&a, &b));
+        assert!(frames_settled(&b, &b));
     }
-
-    signature
-}
-
-fn is_duplicate_signature(previous: &[u8], current: &[u8]) -> bool {
-    if previous.len() != current.len() || previous.is_empty() {
-        return false;
-    }
-
-    let mut sum = 0f32;
-    let mut max_diff = 0u8;
-
-    for (&a, &b) in previous.iter().zip(current.iter()) {
-        let diff = a.abs_diff(b);
-        max_diff = max_diff.max(diff);
-        sum += diff as f32;
-    }
-
-    let avg = sum / previous.len() as f32;
-    avg <= DUPLICATE_AVG_DIFF && max_diff <= DUPLICATE_MAX_DIFF
 }

@@ -182,3 +182,94 @@ fn opencv_orb_relaxed_overlap_handles_large_jump() {
         _ => panic!("expected appended via relaxed overlap"),
     }
 }
+
+fn column_stitcher() -> Stitcher {
+    Stitcher::new(MatchConfig {
+        min_overlap: 100,
+        accept_diff: 3.5,
+        min_append: 2,
+        approx_diff: 0.5,
+        algorithm: Algorithm::ColSample,
+        match_width: 280,
+    })
+}
+
+#[test]
+fn columns_preserve_anchor_after_rejected_frame() {
+    let canvas = make_scroll_canvas(320, 1000);
+    let mut s = column_stitcher();
+    s.push_frame(crop_frame(&canvas, 0, 320));
+    let bad = RgbaImage::from_pixel(320, 320, Rgba([0, 0, 0, 255]));
+    assert!(matches!(s.push_frame(bad), StitchOutcome::NoMatch));
+    assert!(matches!(
+        s.push_frame(crop_frame(&canvas, 84, 320)),
+        StitchOutcome::Appended { added: 84 }
+    ));
+    assert_eq!(
+        s.full_image.as_ref().unwrap().as_ref(),
+        &crop_frame(&canvas, 0, 404)
+    );
+}
+
+#[test]
+fn columns_preserve_anchor_during_reverse_scroll() {
+    let canvas = make_scroll_canvas(320, 1000);
+    let mut s = column_stitcher();
+    s.push_frame(crop_frame(&canvas, 0, 320));
+    s.push_frame(crop_frame(&canvas, 84, 320));
+    s.push_frame(crop_frame(&canvas, 40, 320));
+    s.push_frame(crop_frame(&canvas, 168, 320));
+    assert_eq!(
+        s.full_image.as_ref().unwrap().as_ref(),
+        &crop_frame(&canvas, 0, 488)
+    );
+}
+
+#[test]
+fn pixel_verification_rejects_equal_average_different_content() {
+    let mut a = RgbaImage::new(320, 320);
+    let mut b = a.clone();
+    for y in 0..320 {
+        for x in 0..320 {
+            let value = if x % 2 == 0 { 0 } else { 255 };
+            a.put_pixel(x, y, Rgba([value, value, value, 255]));
+            b.put_pixel(x, y, Rgba([255 - value, 255 - value, 255 - value, 255]));
+        }
+    }
+    assert!(!verified_overlap(&a, &b, 40));
+}
+
+#[test]
+fn blank_overlap_is_not_evidence_of_scroll() {
+    let frame = RgbaImage::from_pixel(320, 320, Rgba([255, 255, 255, 255]));
+    assert!(!verified_overlap(&frame, &frame, 80));
+}
+
+#[test]
+fn fixed_header_and_footer_are_not_repeated_at_joins() {
+    let canvas = make_scroll_canvas(320, 1000);
+    let decorate = |mut frame: RgbaImage| {
+        let h = frame.height();
+        for y in 0..32 {
+            for x in 0..frame.width() {
+                frame.put_pixel(x, y, Rgba([20, 30, 40, 255]));
+                frame.put_pixel(x, h - 1 - y, Rgba([40, 30, 20, 255]));
+            }
+        }
+        frame
+    };
+    let mut s = column_stitcher();
+    s.push_frame(decorate(crop_frame(&canvas, 0, 320)));
+    assert!(matches!(
+        s.push_frame(decorate(crop_frame(&canvas, 84, 320))),
+        StitchOutcome::Appended { added: 84 }
+    ));
+    assert!(matches!(
+        s.push_frame(decorate(crop_frame(&canvas, 168, 320))),
+        StitchOutcome::Appended { added: 84 }
+    ));
+    assert_eq!(
+        s.full_image.as_ref().unwrap().as_ref(),
+        &decorate(crop_frame(&canvas, 0, 488))
+    );
+}

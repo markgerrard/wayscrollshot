@@ -28,6 +28,18 @@ pub struct Args {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// Scroll automatically, saving when the page stops moving.
+    #[arg(long)]
+    pub auto_scroll: bool,
+
+    /// Finish an existing capture, or start one if none is running.
+    #[arg(long)]
+    pub toggle: bool,
+
+    /// Milliseconds of stable content required before accepting a frame.
+    #[arg(long, default_value_t = 450, value_parser = clap::value_parser!(u64).range(100..=5000))]
+    pub settle_ms: u64,
+
     /// Preview width in pixels
     #[arg(short = 'w', long, default_value_t = PREVIEW_MAX_WIDTH)]
     pub preview_width: u32,
@@ -36,16 +48,16 @@ pub struct Args {
     #[arg(short, long)]
     pub clipboard: bool,
 
-    /// Disable preview window
+    /// Save immediately without showing the final review window
     #[arg(long)]
     pub no_preview: bool,
 
-    /// Disable region border overlay
+    /// Compatibility flag: borders are always hidden during capture
     #[arg(long)]
     pub no_border: bool,
 
     /// Stitching algorithm to use
-    #[arg(short, long, value_enum, default_value_t = Algorithm::OpenCvOrb)]
+    #[arg(short, long, value_enum, default_value_t = Algorithm::ColSample)]
     pub algorithm: Algorithm,
 
     /// Existing slurp geometry to use instead of selecting a region. Use '-' to read from stdin.

@@ -80,10 +80,6 @@ impl LayerShellOverlay {
         })
     }
 
-    pub fn sender(&self) -> Option<mpsc::Sender<LayerMessage>> {
-        self.tx.as_ref().map(|tx| tx.clone())
-    }
-
     /// Sends a message to the overlay thread, ignoring send failures.
     pub fn send(&self, message: LayerMessage) {
         if let Some(tx) = &self.tx {

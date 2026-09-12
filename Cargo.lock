@@ -2019,6 +2019,7 @@ dependencies = [
  "smithay-client-toolkit",
  "tiny-skia",
  "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

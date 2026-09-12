@@ -17,7 +17,6 @@ pub struct Region {
 #[derive(Default)]
 pub struct Control {
     running: AtomicBool,
-    paused: AtomicBool,
 }
 
 impl Control {
@@ -25,7 +24,6 @@ impl Control {
     pub fn new() -> Self {
         Self {
             running: AtomicBool::new(true),
-            paused: AtomicBool::new(false),
         }
     }
 
@@ -34,20 +32,9 @@ impl Control {
         self.running.store(false, Ordering::Relaxed);
     }
 
-    /// Toggles pause state.
-    pub fn toggle_pause(&self) {
-        let current = self.paused.load(Ordering::Relaxed);
-        self.paused.store(!current, Ordering::Relaxed);
-    }
-
     /// Returns whether the worker should continue running.
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
-    }
-
-    /// Returns whether capture is currently paused.
-    pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
     }
 }
 

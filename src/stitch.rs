@@ -5,7 +5,7 @@ use hora::core::ann_index::ANNIndex;
 use hora::index::hnsw_idx::HNSWIndex;
 use hora::index::hnsw_params::HNSWParams;
 use image::imageops::{self, FilterType};
-use image::{GenericImage, GrayImage, RgbaImage};
+use image::{GrayImage, RgbaImage};
 use imageproc::corners::{corners_fast12, corners_fast9};
 use rayon::prelude::*;
 
@@ -275,37 +275,34 @@ impl Stitcher {
             offset,
             confidence
         );
-        let preserve_anchor = matches!(self.config.algorithm, Algorithm::OpenCvOrb);
-
+        // Only advance the anchor after content has actually been appended.
         if confidence > self.config.accept_diff {
-            if !preserve_anchor {
-                self.update_last_frame(frame);
-            }
             return StitchOutcome::NoMatch;
         }
-
-        let new_height = if offset > 0 { offset as u32 } else { 0 };
-
+        let new_height = offset.max(0) as u32;
         if new_height < self.config.min_append {
-            if !preserve_anchor {
-                self.update_last_frame(frame);
-                self.last_offset = offset;
-            }
             return StitchOutcome::NoProgress;
+        }
+
+        if offset as u32 >= frame.height()
+            || !verified_overlap(self.last_frame.as_ref().unwrap(), &frame, offset as u32)
+        {
+            return StitchOutcome::NoMatch;
         }
 
         // Append new content
         let full = self.full_image.as_ref().expect("full image set");
         let mut combined = RgbaImage::new(full.width(), full.height() + new_height);
-        combined
-            .copy_from(full.as_ref(), 0, 0)
-            .expect("copy full image");
-
+        // Join inside the overlap, replacing the old frame's bottom edge.
+        // Fixed footers and newly rendered content are not carried into every seam.
         let overlap = frame.height().saturating_sub(new_height);
-        let slice = imageops::crop_imm(&frame, 0, overlap, frame.width(), new_height).to_image();
-        combined
-            .copy_from(&slice, 0, full.height())
-            .expect("copy slice");
+        let seam = overlap / 2;
+        let prefix_height = full.height() - frame.height() + new_height + seam;
+        let stride = full.width() as usize * 4;
+        let prefix_bytes = prefix_height as usize * stride;
+        combined.as_mut()[..prefix_bytes].copy_from_slice(&full.as_raw()[..prefix_bytes]);
+        combined.as_mut()[prefix_bytes..]
+            .copy_from_slice(&frame.as_raw()[seam as usize * stride..]);
 
         self.full_image = Some(Arc::new(combined));
         self.update_last_frame(frame);
@@ -332,10 +329,12 @@ impl Stitcher {
     }
 
     fn compute_cols(&self, frame: &RgbaImage) -> ColSamples {
-        match self.config.algorithm {
+        let samples = match self.config.algorithm {
             Algorithm::Edge => col_sampling_edge(frame),
             _ => col_sampling(frame),
-        }
+        };
+        let margin = samples.len() * 15 / 100;
+        samples[margin..samples.len() - margin].to_vec()
     }
 
     /// FAST corner + HNSW matching (from snow-shot)
@@ -608,4 +607,32 @@ fn predict_offset_iter(max: i32, predict: i32) -> Vec<i32> {
     }
 
     result
+}
+
+// Verify spatial RGB agreement: column averages alone confuse repeated layouts.
+fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> bool {
+    if previous.dimensions() != current.dimensions() || offset >= current.height() {
+        return false;
+    }
+    let height = current.height() - offset;
+    let mut error = 0u64;
+    let mut count = 0u64;
+    let mut texture = 0u64;
+    let margin = (current.height() * 15 / 100).min(height / 4);
+    for y in (margin..height.saturating_sub(margin)).step_by(3) {
+        for x in (0..current.width()).step_by((current.width() / 64).max(1) as usize) {
+            let a = previous.get_pixel(x, y + offset);
+            let b = current.get_pixel(x, y);
+            for c in 0..3 {
+                error += a[c].abs_diff(b[c]) as u64;
+                count += 1;
+            }
+            if y + 3 < height {
+                texture += b[0].abs_diff(current.get_pixel(x, y + 3)[0]) as u64;
+            }
+        }
+    }
+    count > 0
+        && error as f64 / (count as f64) < 3.0
+        && texture as f64 / (count / 3).max(1) as f64 > 0.15
 }
