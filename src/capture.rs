@@ -6,6 +6,58 @@ use image::RgbaImage;
 
 use crate::types::Region;
 
+pub struct WindowCapture {
+    id: String,
+    x: u32,
+    y: u32,
+}
+
+impl WindowCapture {
+    pub fn for_region(region: &Region) -> Option<Self> {
+        let output = Command::new("hyprctl")
+            .args(["clients", "-j"])
+            .output()
+            .ok()?;
+        let clients: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
+        let client = clients
+            .iter()
+            .filter(|c| c["visible"].as_bool() == Some(true))
+            .filter(|c| {
+                let x = c["at"][0].as_i64().unwrap_or(i64::MAX);
+                let y = c["at"][1].as_i64().unwrap_or(i64::MAX);
+                i64::from(region.x) >= x
+                    && i64::from(region.y) >= y
+                    && i64::from(region.x) + i64::from(region.w)
+                        <= x.saturating_add(c["size"][0].as_i64().unwrap_or(0))
+                    && i64::from(region.y) + i64::from(region.h)
+                        <= y.saturating_add(c["size"][1].as_i64().unwrap_or(0))
+            })
+            .min_by_key(|c| c["focusHistoryID"].as_i64().unwrap_or(i64::MAX))?;
+        Some(Self {
+            id: client["stableId"].as_str()?.to_owned(),
+            x: (i64::from(region.x) - client["at"][0].as_i64()?) as u32,
+            y: (i64::from(region.y) - client["at"][1].as_i64()?) as u32,
+        })
+    }
+
+    pub fn capture(&self, region: &Region) -> Result<RgbaImage> {
+        let output = Command::new("grim")
+            .args(["-T", &self.id, "-s", "1", "-t", "png", "-l", "0", "-"])
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "Window capture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = image::load_from_memory(&output.stdout)?.to_rgba8();
+        anyhow::ensure!(
+            self.x + region.w <= image.width() && self.y + region.h <= image.height(),
+            "Capture window changed size; select the area again"
+        );
+        Ok(image::imageops::crop_imm(&image, self.x, self.y, region.w, region.h).to_image())
+    }
+}
+
 /// Parses an existing `slurp` geometry output.
 pub fn region_from_slurp_output(raw: &str) -> Result<Region> {
     let raw = raw.trim();

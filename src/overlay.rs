@@ -76,7 +76,23 @@ impl LayerShellOverlay {
         preview_width: u32,
     ) -> Result<Option<Self>> {
         let outputs = probe_output_rects()?;
-        let Some(area) = live_preview_area(&region, preview_width, &outputs) else {
+        let area = (|| {
+            crate::capture::WindowCapture::for_region(&region)?;
+            let w = preview_width.min(region.w.saturating_sub(24));
+            let h = region.h.saturating_sub(24).min(720);
+            if w < 120 || h < INITIAL_HEIGHT + 32 {
+                return None;
+            }
+            Some(Region {
+                raw: String::new(),
+                x: region.x + region.w as i32 - w as i32 - 12,
+                y: region.y + region.h as i32 - h as i32 - 12,
+                w,
+                h,
+            })
+        })()
+        .or_else(|| live_preview_area(&region, preview_width, &outputs));
+        let Some(area) = area else {
             return Ok(None);
         };
         Self::new_with_area(command_tx, region, area.w, Some(area), OverlayMode::Live).map(Some)
@@ -124,7 +140,12 @@ impl LayerShellOverlay {
             }
         });
         // Wait briefly for layer-shell to initialize
-        thread::sleep(Duration::from_millis(200));
+        for _ in 0..100 {
+            if ready.load(Ordering::Acquire) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
         if !ready.load(Ordering::Relaxed) {
             bail!("layer-shell overlay did not initialize in time");
         }
@@ -186,7 +207,7 @@ impl LayerPreview {
 
     fn update_position(&mut self) {
         let output_rects = self.output_rects();
-        let (margin_top, margin_left) = if self.mode == OverlayMode::Live {
+        let (mut margin_top, margin_left) = if self.mode == OverlayMode::Live {
             overlay_margins(
                 &self.region,
                 self.width,
@@ -196,6 +217,17 @@ impl LayerPreview {
         } else {
             bottom_left_margins(&self.region, self.height, &output_rects)
         };
+        if self.mode == OverlayMode::Live {
+            if let Some(area) = &self.fixed_area {
+                if area.x >= self.region.x
+                    && area.y >= self.region.y
+                    && area.x < self.region.x + self.region.w as i32
+                    && area.y < self.region.y + self.region.h as i32
+                {
+                    margin_top += area.h.saturating_sub(self.height) as i32;
+                }
+            }
+        }
         self.layer.set_margin(margin_top, 0, 0, margin_left);
     }
 

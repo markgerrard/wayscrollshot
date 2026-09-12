@@ -316,6 +316,11 @@ fn capture_loop(
     state: &Arc<Mutex<StitchState>>,
     args: &Args,
 ) -> Result<String> {
+    let window_capture = crate::capture::WindowCapture::for_region(region);
+    // Capture the window surface itself so floating capture UI is excluded.
+    if let Some(source) = &window_capture {
+        source.capture(region)?;
+    }
     let mut auto = if control.is_auto_scroll() {
         Some(crate::auto_scroll::AutoScroller::new(region)?)
     } else {
@@ -360,7 +365,11 @@ fn capture_loop(
         if auto_started.is_some_and(|started| started.elapsed() > Duration::from_secs(180)) {
             return Ok("Time limit reached; partial capture".into());
         }
-        let frame = capture_frame(region)?;
+        let frame = if let Some(source) = &window_capture {
+            source.capture(region)?
+        } else {
+            capture_frame(region)?
+        };
         let stable = candidate
             .as_ref()
             .is_some_and(|prev| frames_settled(prev, &frame));
