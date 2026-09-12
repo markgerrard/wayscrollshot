@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "mark.capture",
+  "name": "Screen capture",
+  "version": "1.0.0",
+  "author": "markgerrard",
+  "license": "MIT",
+  "description": "Quick access to wayscrollshot capture modes",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "Panel.qml"},
+  "barWidget": {"displayName": "Screen capture", "description": "All-in-One, area, screen, window and scrolling capture", "category": "Utilities", "allowMultiple": false, "defaultSection": "right", "defaults": {}, "schema": []}
+}

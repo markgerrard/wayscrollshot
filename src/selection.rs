@@ -31,6 +31,8 @@ use crate::overlay::placement::{find_output_by_id, probe_output_rects, OutputRec
 use crate::{types::Region, ui};
 use serde_json::Value;
 
+const TOOLBAR_Y: f32 = 64.;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Area,
@@ -191,7 +193,7 @@ impl Selector {
     fn toolbar_hover(&self) -> Option<usize> {
         let (x, y) = self.position;
         let bx = (self.width as f64 - self.toolbar_width()) / 2.;
-        if y < self.height as f64 - 88. || y > self.height as f64 - 32. {
+        if y < TOOLBAR_Y as f64 - 4. || y > TOOLBAR_Y as f64 + 52. {
             return None;
         }
         self.toolbar()
@@ -332,66 +334,41 @@ impl Selector {
             let label = format!("{} × {}", r.w, r.h);
             let tw = ui::text_width(&label, 15.);
             let lx = (x + w - tw - 36.).clamp(4., (self.width as f32 - tw - 28.).max(4.));
-            let ly = if y > 48. {
+            let mut ly = if y > 48. {
                 y - 40.
             } else {
                 (y + 12.).min(self.height as f32 - 40.)
             };
+            let bar_left = (self.width as f32 - self.toolbar_width() as f32) / 2. - 8.;
+            let bar_right = self.width as f32 - bar_left;
+            if lx < bar_right
+                && lx + tw + 24. > bar_left
+                && ly < TOOLBAR_Y + 84.
+                && ly + 28. > TOOLBAR_Y - 12.
+            {
+                ly = TOOLBAR_Y + 96.;
+            }
             ui::rounded(&mut p, lx, ly, tw + 24., 28., 8., [28, 29, 34, 245]);
             ui::text(&mut p, &label, lx + 12., ly + 5., 15., [255, 255, 255, 255]);
         }
         let valid = self.valid_selection();
-        let title = match &self.selection {
-            Some(_) if valid => "Ready when you are",
-            Some(_) if self.mode == Mode::Scroll => "Select at least 32 × 160 pixels",
-            Some(_) => "Drag to choose your area",
-            None => "What would you like to capture?",
-        };
-        let subtitle = if self.selection.is_some() {
-            "Drag an edge or corner to refine your selection"
-        } else {
-            if self.mode == Mode::Window {
-                "Point at a window, then press Enter"
-            } else if self.mode == Mode::Scroll {
-                "Select the content to scroll automatically"
+        let hint = if self.selection.is_some() && !valid {
+            if self.mode == Mode::Scroll {
+                "Select at least 32 × 160 pixels"
             } else {
-                "Drag anywhere to select an area"
+                "Drag to select an area"
             }
+        } else if self.selection.is_some() {
+            "Drag edges to adjust · Enter to capture · Esc to cancel"
+        } else if self.mode == Mode::Window {
+            "Point at a window · Enter to capture · Esc to cancel"
+        } else {
+            "Drag to select · Space for window · Enter to capture · Esc to cancel"
         };
-        let pw = 540.;
-        let px = (self.width as f32 - pw) / 2.;
-        ui::panel(&mut p, px, 40., pw, 118., 18.);
-        ui::text(
-            &mut p,
-            title,
-            (self.width as f32 - ui::text_width(title, 23.)) / 2.,
-            56.,
-            23.,
-            [249, 249, 252, 255],
-        );
-        ui::text(
-            &mut p,
-            subtitle,
-            (self.width as f32 - ui::text_width(subtitle, 15.)) / 2.,
-            86.,
-            15.,
-            [177, 181, 195, 255],
-        );
-        ui::shortcuts(
-            &mut p,
-            &[
-                ("Space", "Window"),
-                ("F", "Screen"),
-                ("Enter", "Capture"),
-                ("Esc", "Cancel"),
-            ],
-            self.width as f32 / 2.,
-            119.,
-        );
         let tw = self.toolbar_width() as f32;
         let bx = (self.width as f32 - tw) / 2.;
-        let by = self.height as f32 - 84.;
-        ui::panel(&mut p, bx - 8., by - 12., tw + 16., 72., 18.);
+        let by = TOOLBAR_Y;
+        ui::panel(&mut p, bx - 8., by - 12., tw + 16., 96., 18.);
         for (i, (offset, w, label, icon)) in self.toolbar().iter().enumerate() {
             let (offset, w) = (*offset as f32, *w as f32);
             let primary = *label == "Capture";
@@ -436,6 +413,14 @@ impl Selector {
                 },
             );
         }
+        ui::text(
+            &mut p,
+            hint,
+            (self.width as f32 - ui::text_width(hint, 13.)) / 2.,
+            by + 65.,
+            13.,
+            [167, 174, 190, 255],
+        );
         let needed = (self.width * self.height * 4) as usize;
         if self.pool.len() < needed {
             if self.pool.resize(needed).is_err() {
@@ -785,7 +770,7 @@ fn query(command: &str) -> Result<Value> {
     anyhow::ensure!(out.status.success(), "Cannot read desktop geometry");
     Ok(serde_json::from_slice(&out.stdout)?)
 }
-pub fn select(scrolling: bool, show_modes: bool) -> Result<Option<(Region, bool)>> {
+pub fn select(scrolling: bool, show_modes: bool, initial: &str) -> Result<Option<(Region, bool)>> {
     let cursor = query("cursorpos")?;
     let cx = cursor["x"].as_i64().unwrap_or(0);
     let cy = cursor["y"].as_i64().unwrap_or(0);
@@ -882,6 +867,18 @@ pub fn select(scrolling: bool, show_modes: bool) -> Result<Option<(Region, bool)
         drag: None,
         result: None,
     };
+    match initial {
+        "screen" => {
+            state.choose_screen();
+            if !scrolling {
+                state.mode = Mode::Screen;
+            }
+        }
+        "window" => {
+            state.mode = Mode::Window;
+        }
+        _ => {}
+    }
     while !state.exit {
         queue.blocking_dispatch(&mut state)?;
         if state.dirty && !state.exit {

@@ -20,8 +20,11 @@ pub fn run(mut args: Args) -> Result<()> {
         bail!("Wayland session required");
     }
     let region = if args.slurp_output().is_none() {
-        let Some((region, scrolling)) =
-            crate::selection::select(!args.screenshot && !args.capture_bar, args.capture_bar)?
+        let Some((region, scrolling)) = crate::selection::select(
+            !args.screenshot && !args.capture_bar,
+            args.capture_bar,
+            &args.select_mode,
+        )?
         else {
             return Ok(());
         };

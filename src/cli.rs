@@ -32,6 +32,10 @@ pub struct Args {
     #[arg(long)]
     pub capture_bar: bool,
 
+    /// Initial selection for menu actions.
+    #[arg(long, default_value = "area", value_parser = ["area", "window", "screen"])]
+    pub select_mode: String,
+
     /// Take one still screenshot with the native selection and review UI.
     #[arg(long, conflicts_with = "auto_scroll")]
     pub screenshot: bool,
