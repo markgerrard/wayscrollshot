@@ -218,6 +218,7 @@ fn capture_loop(
     let mut stable_since = Instant::now();
     let mut submitted = false;
     let mut unchanged_steps = 0;
+    let mut overlap_retries = 0;
     let started = Instant::now();
     let mut last_accepted = Instant::now();
     while control.is_running() {
@@ -258,6 +259,7 @@ fn capture_loop(
         match outcome {
             StitchOutcome::FirstFrame | StitchOutcome::Appended { .. } => {
                 unchanged_steps = 0;
+                overlap_retries = 0;
                 last_accepted = Instant::now();
                 apply_state_update(
                     state,
@@ -272,11 +274,24 @@ fn capture_loop(
                 last_accepted = Instant::now();
             }
             StitchOutcome::NoMatch => {
-                if auto.is_some() {
-                    return Ok(
-                        "Uncertain overlap; stopped to avoid a broken join (partial capture)"
-                            .into(),
-                    );
+                if let Some(scroller) = auto.as_mut() {
+                    overlap_retries += 1;
+                    if overlap_retries == 1 {
+                        log::warn!(
+                            "Overlap rejected; waiting for delayed rendering before retrying"
+                        );
+                    } else if overlap_retries <= 4 && scroller.retry_smaller()? {
+                        log::warn!("Overlap rejected; backed up and reduced future scroll steps");
+                    } else {
+                        return Ok("Could not align this section after retrying with smaller steps; partial capture".into());
+                    }
+                    // Retry against the last accepted frame, never an unverified one.
+                    thread::sleep(Duration::from_millis(700));
+                    candidate = None;
+                    submitted = false;
+                    stable_since = Instant::now();
+                    last_accepted = Instant::now();
+                    continue;
                 }
                 log::warn!("Overlap rejected; scroll back toward the last accepted content");
             }

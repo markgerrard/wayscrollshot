@@ -53,3 +53,16 @@ Auto-scroll targets 60% of crop height in wheel ticks and learns pixels per tick
 Default settling delay is 180 ms. The 18-section test page took about 7 seconds,
 versus about 20 previously. All 31 tests passed. On the live desktop, a capture
 with the mask and preview active matched its baseline with zero changed pixels.
+
+
+## Overlap recovery
+
+On a rejected auto-scroll join, wait 700 ms for late rendering and retry the same
+position. If still rejected, backtrack part of the last wheel movement, keeping
+the original accepted frame as anchor. Halve the step limit for subsequent scrolls.
+Retries are bounded; a failed single-tick match still produces a partial result.
+Regression tests verify that a rejected 600-pixel jump recovers after returning
+to a 300-pixel offset, with an exact image match and no missing rows.
+33 tests passed. The supplied bridal-site tunnel returned Cloudflare error 1033
+at validation time, so recovery on that live page remains unverified.
+Shortcut diagnostics append to ~/.local/state/wayscrollshot/capture.log.

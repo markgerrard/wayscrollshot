@@ -30,6 +30,7 @@ pub struct AutoScroller {
     center: (i64, i64),
     pixels_per_tick: f64,
     last_ticks: i32,
+    max_ticks: i32,
     conn: Connection,
     queue: wayland_client::EventQueue<State>,
     pointer: ZwlrVirtualPointerV1,
@@ -61,6 +62,7 @@ impl AutoScroller {
         Ok(Self {
             pixels_per_tick: 120.0,
             last_ticks: 1,
+            max_ticks: 8,
             center: (
                 i64::from(region.x) + i64::from(region.w) / 2,
                 i64::from(region.y) + i64::from(region.h) / 2,
@@ -75,7 +77,20 @@ impl AutoScroller {
     }
     pub fn step(&mut self, target_pixels: u32) -> Result<()> {
         self.last_ticks =
-            ((target_pixels as f64 / self.pixels_per_tick).floor() as i32).clamp(1, 8);
+            ((target_pixels as f64 / self.pixels_per_tick).floor() as i32).clamp(1, self.max_ticks);
+        self.send_ticks(self.last_ticks)
+    }
+    /// Backtrack part of a rejected jump while preserving the stitcher's anchor.
+    pub fn retry_smaller(&mut self) -> Result<bool> {
+        let Some((back, remaining)) = reduced_jump(self.last_ticks) else {
+            return Ok(false);
+        };
+        self.send_ticks(-back)?;
+        self.last_ticks = remaining;
+        self.max_ticks = self.max_ticks.min(remaining);
+        Ok(true)
+    }
+    fn send_ticks(&mut self, ticks: i32) -> Result<()> {
         let coords = cursor_position()?;
         anyhow::ensure!(
             (coords.0 - self.center.0).abs() <= 24 && (coords.1 - self.center.1).abs() <= 24,
@@ -85,8 +100,8 @@ impl AutoScroller {
         self.pointer.axis_discrete(
             0,
             wl_pointer::Axis::VerticalScroll,
-            15.0 * f64::from(self.last_ticks),
-            self.last_ticks,
+            15.0 * f64::from(ticks),
+            ticks,
         );
         self.pointer.frame();
         self.conn.flush()?;
@@ -99,6 +114,14 @@ impl Drop for AutoScroller {
         self.pointer.destroy();
         let _ = self.conn.flush();
     }
+}
+
+fn reduced_jump(ticks: i32) -> Option<(i32, i32)> {
+    if ticks <= 1 {
+        return None;
+    }
+    let remaining = ticks / 2;
+    Some((ticks - remaining, remaining))
 }
 
 fn cursor_position() -> Result<(i64, i64)> {
@@ -118,6 +141,13 @@ fn parse_cursor_position(text: &str) -> Option<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_keeps_a_positive_smaller_offset_from_original_anchor() {
+        assert_eq!(reduced_jump(4), Some((2, 2)));
+        assert_eq!(reduced_jump(3), Some((2, 1)));
+        assert_eq!(reduced_jump(2), Some((1, 1)));
+        assert_eq!(reduced_jump(1), None);
+    }
     #[test]
     fn parses_cursor_coordinates_and_rejects_command_errors() {
         assert_eq!(parse_cursor_position("123, 456\n"), Some((123, 456)));
