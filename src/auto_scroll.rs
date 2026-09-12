@@ -1,4 +1,4 @@
-use crate::types::Region;
+use crate::types::{Control, Region};
 use anyhow::{Context, Result};
 use wayland_client::{
     delegate_noop,
@@ -27,7 +27,7 @@ delegate_noop!(State: ZwlrVirtualPointerManagerV1);
 delegate_noop!(State: ZwlrVirtualPointerV1);
 
 pub struct AutoScroller {
-    center: (i64, i64),
+    region: Region,
     pixels_per_tick: f64,
     last_ticks: i32,
     max_ticks: i32,
@@ -63,10 +63,7 @@ impl AutoScroller {
             pixels_per_tick: 120.0,
             last_ticks: 1,
             max_ticks: 8,
-            center: (
-                i64::from(region.x) + i64::from(region.w) / 2,
-                i64::from(region.y) + i64::from(region.h) / 2,
-            ),
+            region: region.clone(),
             conn,
             queue,
             pointer,
@@ -75,27 +72,25 @@ impl AutoScroller {
     pub fn observe(&mut self, pixels: u32) {
         self.pixels_per_tick = (pixels as f64 / self.last_ticks.max(1) as f64).clamp(20.0, 500.0);
     }
-    pub fn step(&mut self, target_pixels: u32) -> Result<()> {
+    pub fn step(&mut self, target_pixels: u32, control: &Control) -> Result<()> {
         self.last_ticks =
             ((target_pixels as f64 / self.pixels_per_tick).floor() as i32).clamp(1, self.max_ticks);
-        self.send_ticks(self.last_ticks)
+        self.send_ticks(self.last_ticks, control)
     }
     /// Backtrack part of a rejected jump while preserving the stitcher's anchor.
-    pub fn retry_smaller(&mut self) -> Result<bool> {
+    pub fn retry_smaller(&mut self, control: &Control) -> Result<bool> {
         let Some((back, remaining)) = reduced_jump(self.last_ticks) else {
             return Ok(false);
         };
-        self.send_ticks(-back)?;
+        self.send_ticks(-back, control)?;
         self.last_ticks = remaining;
         self.max_ticks = self.max_ticks.min(remaining);
         Ok(true)
     }
-    fn send_ticks(&mut self, ticks: i32) -> Result<()> {
-        let coords = cursor_position()?;
-        anyhow::ensure!(
-            (coords.0 - self.center.0).abs() <= 24 && (coords.1 - self.center.1).abs() <= 24,
-            "Pointer moved; automatic scrolling stopped"
-        );
+    fn send_ticks(&mut self, ticks: i32, control: &Control) -> Result<()> {
+        if !wait_until_scrollable(&self.region, control, cursor_position)? {
+            return Ok(());
+        }
         self.pointer.axis_source(wl_pointer::AxisSource::Wheel);
         self.pointer.axis_discrete(
             0,
@@ -114,6 +109,26 @@ impl Drop for AutoScroller {
         self.pointer.destroy();
         let _ = self.conn.flush();
     }
+}
+
+fn wait_until_scrollable(
+    region: &Region,
+    control: &Control,
+    mut query: impl FnMut() -> Result<(i64, i64)>,
+) -> Result<bool> {
+    while control.is_running() {
+        if !control.is_paused() && pointer_inside(region, query()?) {
+            return Ok(true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Ok(false)
+}
+
+fn pointer_inside(region: &Region, (x, y): (i64, i64)) -> bool {
+    let left = i64::from(region.x);
+    let top = i64::from(region.y);
+    x >= left && x < left + i64::from(region.w) && y >= top && y < top + i64::from(region.h)
 }
 
 fn reduced_jump(ticks: i32) -> Option<(i32, i32)> {
@@ -141,6 +156,67 @@ fn parse_cursor_position(text: &str) -> Option<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn leaving_then_returning_to_crop_resumes_scrolling() {
+        let r = Region {
+            raw: String::new(),
+            x: 100,
+            y: 100,
+            w: 900,
+            h: 700,
+        };
+        let control = Control::new();
+        let mut calls = 0;
+        assert!(wait_until_scrollable(&r, &control, || {
+            calls += 1;
+            Ok(if calls == 1 { (0, 0) } else { (500, 400) })
+        })
+        .unwrap());
+        assert_eq!(calls, 2);
+    }
+    #[test]
+    fn finishing_capture_interrupts_pointer_wait() {
+        let r = Region {
+            raw: String::new(),
+            x: 100,
+            y: 100,
+            w: 900,
+            h: 700,
+        };
+        let control = std::sync::Arc::new(Control::new());
+        let stop = control.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            stop.stop();
+        });
+        assert!(!wait_until_scrollable(&r, &control, || Ok((0, 0))).unwrap());
+        worker.join().unwrap();
+    }
+    #[test]
+    fn pointer_can_move_across_the_capture_without_stopping() {
+        let r = Region {
+            raw: String::new(),
+            x: 100,
+            y: 100,
+            w: 900,
+            h: 700,
+        };
+        assert!(pointer_inside(&r, (110, 110)));
+        assert!(pointer_inside(&r, (990, 790)));
+        assert!(!pointer_inside(&r, (1000, 400)));
+    }
+    #[test]
+    fn pointer_bounds_support_negative_monitor_coordinates() {
+        let r = Region {
+            raw: String::new(),
+            x: -1920,
+            y: -100,
+            w: 1000,
+            h: 700,
+        };
+        assert!(pointer_inside(&r, (-1900, 0)));
+        assert!(!pointer_inside(&r, (-900, 0)));
+    }
     #[test]
     fn recovery_keeps_a_positive_smaller_offset_from_original_anchor() {
         assert_eq!(reduced_jump(4), Some((2, 2)));

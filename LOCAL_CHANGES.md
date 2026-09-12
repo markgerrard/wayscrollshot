@@ -10,7 +10,7 @@ This local wayscrollshot branch is the scrolling-capture prototype alongside Ope
 - A review panel appears after capture has stopped: Save, Copy, or Cancel.
 - `--no-preview`: save immediately (useful for testing).
 - `--settle-ms 450`: minimum stable interval; can increase for slow pages.
-- Moving the pointer away from the capture center stops automatic scrolling.
+- Moving outside the selected area pauses automatic scrolling; returning resumes it.
 
 ## Changes
 
@@ -66,3 +66,6 @@ to a 300-pixel offset, with an exact image match and no missing rows.
 33 tests passed. The supplied bridal-site tunnel returned Cloudflare error 1033
 at validation time, so recovery on that live page remains unverified.
 Shortcut diagnostics append to ~/.local/state/wayscrollshot/capture.log.
+
+
+Pointer movement is allowed across the entire capture rectangle. Leaving it pauses scroll input, and returning resumes it. Finish/cancel still work while waiting outside the crop. Tests cover return-to-crop resumption and interruption of the wait.

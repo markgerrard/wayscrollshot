@@ -280,7 +280,7 @@ fn capture_loop(
                         log::warn!(
                             "Overlap rejected; waiting for delayed rendering before retrying"
                         );
-                    } else if overlap_retries <= 4 && scroller.retry_smaller()? {
+                    } else if overlap_retries <= 4 && scroller.retry_smaller(control)? {
                         log::warn!("Overlap rejected; backed up and reduced future scroll steps");
                     } else {
                         return Ok("Could not align this section after retrying with smaller steps; partial capture".into());
@@ -303,7 +303,7 @@ fn capture_loop(
             if stitcher.stats().total_height as u64 * region.w as u64 * 4 > 192 * 1024 * 1024 {
                 return Ok("Image size limit reached; partial capture".into());
             }
-            scroller.step(region.h * args.scroll_percent / 100)?;
+            scroller.step(region.h * args.scroll_percent / 100, control)?;
             // Allow scroll animations to start before looking for a settled frame.
             thread::sleep(Duration::from_millis(60));
             candidate = None;
