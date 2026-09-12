@@ -263,12 +263,33 @@ impl Stitcher {
             return StitchOutcome::FirstFrame;
         }
 
-        let (offset, confidence) = match self.config.algorithm {
+        let (mut offset, mut confidence) = match self.config.algorithm {
             Algorithm::Fast => self.find_offset_fast(&frame),
             Algorithm::Template => self.find_offset_template(&frame),
             Algorithm::OpenCvOrb => self.find_offset_opencv_orb(&frame),
             Algorithm::ColSample | Algorithm::Edge => self.find_offset_colsample(&frame),
         };
+
+        // Browser chrome can dominate row averages. Try feature matching on
+        // moving content before abandoning an otherwise overlapping frame.
+        if !matches!(self.config.algorithm, Algorithm::OpenCvOrb)
+            && (confidence > self.config.accept_diff
+                || (offset >= self.config.min_append as i32
+                    && !verified_overlap(self.last_frame.as_ref().unwrap(), &frame, offset as u32)))
+        {
+            let fallback = self.find_offset_opencv_orb(&frame);
+            if fallback.0 >= self.config.min_append as i32
+                && fallback.1 <= self.config.accept_diff
+                && verify_overlap(
+                    self.last_frame.as_ref().unwrap(),
+                    &frame,
+                    fallback.0 as u32,
+                    false,
+                )
+            {
+                (offset, confidence) = fallback;
+            }
+        }
 
         log::info!(
             "【长截图拼接】【偏移估算】偏移为 {}，置信度为 {}",
@@ -611,6 +632,15 @@ fn predict_offset_iter(max: i32, predict: i32) -> Vec<i32> {
 
 // Verify spatial RGB agreement: column averages alone confuse repeated layouts.
 fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> bool {
+    verify_overlap(previous, current, offset, true)
+}
+
+fn verify_overlap(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    offset: u32,
+    allow_partial: bool,
+) -> bool {
     if previous.dimensions() != current.dimensions() || offset >= current.height() {
         return false;
     }
@@ -621,7 +651,25 @@ fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> b
     let mut matching_pixels = 0u64;
     let mut texture = 0u64;
     let margin = (current.height() * 15 / 100).min(height / 4);
-    for y in (margin..height.saturating_sub(margin)).step_by(3) {
+    // Exclude an unchanged top strip (browser chrome / fixed header) from
+    // scroll verification, while retaining texture checks for actual content.
+    let mut fixed_top = 0;
+    for y in 0..current.height() / 3 {
+        let mut difference = 0u64;
+        let mut samples = 0u64;
+        for x in (0..current.width()).step_by((current.width() / 64).max(1) as usize) {
+            for c in 0..3 {
+                difference +=
+                    previous.get_pixel(x, y)[c].abs_diff(current.get_pixel(x, y)[c]) as u64;
+                samples += 1;
+            }
+        }
+        if samples == 0 || difference > samples {
+            break;
+        }
+        fixed_top = y + 1;
+    }
+    for y in (margin.max(fixed_top)..height.saturating_sub(margin)).step_by(3) {
         for x in (0..current.width()).step_by((current.width() / 64).max(1) as usize) {
             let a = previous.get_pixel(x, y + offset);
             let b = current.get_pixel(x, y);
@@ -642,6 +690,6 @@ fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> b
     let average_matches = count > 0 && (error as f64) / (count as f64) < 3.0;
     let mostly_matches = sampled_pixels > 0 && matching_pixels * 100 >= sampled_pixels * 76;
     count > 0
-        && (average_matches || mostly_matches)
+        && (average_matches || (allow_partial && mostly_matches))
         && texture as f64 / (count / 3).max(1) as f64 > 0.15
 }

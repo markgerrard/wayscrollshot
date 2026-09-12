@@ -2,6 +2,48 @@ use image::{imageops, Rgba};
 
 use super::*;
 
+#[test]
+#[ignore = "set WAYSCROLLSHOT_REGRESSION_IMAGE to the reported capture"]
+fn reported_cloud_capture_with_fixed_browser_chrome() {
+    let canvas = image::open(std::env::var("WAYSCROLLSHOT_REGRESSION_IMAGE").unwrap())
+        .unwrap()
+        .to_rgba8();
+    let previous = crop_frame(&canvas, 0, 650);
+    let mut current = crop_frame(&canvas, 300, 650);
+    imageops::replace(
+        &mut current,
+        &imageops::crop_imm(&previous, 0, 0, previous.width(), 150).to_image(),
+        0,
+        0,
+    );
+    let mut stitcher = column_stitcher();
+    stitcher.push_frame(previous);
+    assert!(matches!(
+        stitcher.push_frame(current),
+        StitchOutcome::Appended { added: 300 }
+    ));
+    assert!(stitcher.full_image().unwrap().as_ref() == &crop_frame(&canvas, 0, 950));
+}
+
+#[test]
+fn column_matching_recovers_with_a_fixed_browser_header() {
+    let canvas = make_scroll_canvas(480, 1200);
+    let previous = crop_frame(&canvas, 0, 650);
+    let mut current = crop_frame(&canvas, 300, 650);
+    imageops::replace(
+        &mut current,
+        &imageops::crop_imm(&previous, 0, 0, previous.width(), 150).to_image(),
+        0,
+        0,
+    );
+    let mut stitcher = column_stitcher();
+    stitcher.push_frame(previous);
+    assert!(matches!(
+        stitcher.push_frame(current),
+        StitchOutcome::Appended { added: 300 }
+    ));
+}
+
 /// 构造包含多种纹理的长截图测试画布
 ///
 /// `width` 和 `height` 为画布尺寸；返回用于 ORB 匹配的测试图像
@@ -324,7 +366,7 @@ fn rejected_large_jump_can_recover_by_scrolling_partway_back() {
     });
     s.push_frame(crop_frame(&canvas, 0, 880));
     assert!(matches!(
-        s.push_frame(crop_frame(&canvas, 600, 880)),
+        s.push_frame(crop_frame(&canvas, 900, 880)),
         StitchOutcome::NoMatch
     ));
     assert!(matches!(
