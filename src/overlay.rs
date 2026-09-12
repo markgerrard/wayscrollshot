@@ -52,7 +52,6 @@ const PREVIEW_GAP: i32 = 8;
 pub(super) enum OverlayMode {
     Live,
     Review,
-    Gallery,
 }
 
 pub struct LayerShellOverlay {
@@ -83,11 +82,14 @@ impl LayerShellOverlay {
         Self::new_with_area(command_tx, region, area.w, Some(area), OverlayMode::Live).map(Some)
     }
 
-    pub fn new_gallery(command_tx: mpsc::Sender<UserCommand>, preview_width: u32) -> Result<Self> {
+    pub fn new_cloud_review(
+        command_tx: mpsc::Sender<UserCommand>,
+        preview_width: u32,
+    ) -> Result<Self> {
         let output = probe_output_rects()?
             .into_iter()
             .next()
-            .context("No screen available for cloud gallery")?;
+            .context("No screen available for cloud preview")?;
         let region = Region {
             raw: String::new(),
             x: output.x,
@@ -95,13 +97,7 @@ impl LayerShellOverlay {
             w: output.width as u32,
             h: output.height as u32,
         };
-        Self::new_with_area(
-            command_tx,
-            region,
-            preview_width,
-            None,
-            OverlayMode::Gallery,
-        )
+        Self::new_with_area(command_tx, region, preview_width, None, OverlayMode::Review)
     }
 
     fn new_with_area(
@@ -328,7 +324,6 @@ impl LayerPreview {
         );
         let label = match self.mode {
             OverlayMode::Review => "Capture ready",
-            OverlayMode::Gallery => "Cloud captures",
             OverlayMode::Live if self.paused => "Paused",
             OverlayMode::Live => "Scrolling capture",
         };
@@ -342,8 +337,6 @@ impl LayerPreview {
                 3.,
                 if self.mode == OverlayMode::Review {
                     [123, 180, 157, 255]
-                } else if self.mode == OverlayMode::Gallery {
-                    [128, 167, 237, 255]
                 } else if self.paused {
                     [227, 181, 112, 255]
                 } else {
@@ -421,9 +414,6 @@ impl LayerPreview {
             (x / segment).min(count - 1)
         };
         let command = match index {
-            0 if self.mode == OverlayMode::Gallery => UserCommand::Previous,
-            1 if self.mode == OverlayMode::Gallery => UserCommand::Next,
-            2 if self.mode == OverlayMode::Gallery => UserCommand::Open,
             0 => UserCommand::Save,
             1 => UserCommand::Copy,
             2 if self.mode == OverlayMode::Review => UserCommand::Cloud,
@@ -689,23 +679,10 @@ impl KeyboardHandler for LayerPreview {
 
         if let Some(text) = event.utf8.as_deref() {
             match text {
-                "s" | "S" if self.mode != OverlayMode::Gallery => {
-                    self.handle_command(qh, UserCommand::Save)
-                }
-                "c" | "C" if self.mode != OverlayMode::Gallery => {
-                    self.handle_command(qh, UserCommand::Copy)
-                }
+                "s" | "S" => self.handle_command(qh, UserCommand::Save),
+                "c" | "C" => self.handle_command(qh, UserCommand::Copy),
                 "u" | "U" if self.mode == OverlayMode::Review => {
                     self.handle_command(qh, UserCommand::Cloud)
-                }
-                "h" | "H" if self.mode == OverlayMode::Gallery => {
-                    self.handle_command(qh, UserCommand::Previous)
-                }
-                "l" | "L" if self.mode == OverlayMode::Gallery => {
-                    self.handle_command(qh, UserCommand::Next)
-                }
-                "o" | "O" if self.mode == OverlayMode::Gallery => {
-                    self.handle_command(qh, UserCommand::Open)
                 }
                 "q" | "Q" => self.handle_command(qh, UserCommand::Cancel),
                 " " if self.mode == OverlayMode::Live => {

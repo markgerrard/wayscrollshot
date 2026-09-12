@@ -85,9 +85,6 @@ pub enum UserCommand {
     Copy,
     Cloud,
     EnableAuto,
-    Previous,
-    Next,
-    Open,
     Cancel,
     TogglePause,
 }

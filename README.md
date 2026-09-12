@@ -251,7 +251,7 @@ wayscrollshot --toggle  # finish the running capture (or start if none exists)
 
 The Cloud action reads DigitalOcean Spaces settings from `~/.config/wayscrollshot/cloud.toml` and credentials from the desktop Secret Service keyring. It always saves the original capture locally before uploading it. The CDN link is copied to the clipboard after a successful upload.
 
-`wayscrollshot --cloud-gallery` opens a bottom-left panel with **Back**, **Next**, **Open**, and **Close**. SQLite metadata lives at `~/.cache/wayscrollshot/cloud.sqlite3`. Small preview images are cached for `cache_ttl_hours` (24 hours by default); expiring a preview does not delete the local screenshot or its Spaces object.
+The Omarchy panel expands into a centered carousel of cached cloud captures. Choosing a card restores that image to the normal review preview with **Save**, **Copy**, **Cloud**, and **Cancel**. `wayscrollshot --cloud-gallery` restores the newest cached capture directly; pass `--cloud-id` to restore a specific one. SQLite metadata lives at `~/.cache/wayscrollshot/cloud.sqlite3`. Small preview images are cached for `cache_ttl_hours` (24 hours by default); expiring a preview does not delete the local screenshot or its Spaces object.
 
 ## Limitations
 

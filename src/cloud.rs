@@ -309,14 +309,6 @@ pub fn copy_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn open_url(url: &str) -> Result<()> {
-    Command::new("xdg-open")
-        .arg(url)
-        .spawn()
-        .context("failed to open the cloud capture")?;
-    Ok(())
-}
-
 pub fn gallery_entries() -> Result<Vec<CloudEntry>> {
     let conn = open_cache()?;
     conn.execute(
@@ -388,19 +380,7 @@ pub fn gallery_preview(entry: &CloudEntry, width: u32) -> Result<PreviewImage> {
         return Ok(build_preview(&image, width));
     }
 
-    let image = if let Some(path) = entry.local_path.as_ref().filter(|path| path.is_file()) {
-        image::open(path)?.to_rgba8()
-    } else {
-        let output = Command::new("curl")
-            .args(["--fail", "--silent", "--show-error"])
-            .arg(&entry.url)
-            .output()
-            .context("failed to fetch cloud preview")?;
-        if !output.status.success() {
-            bail!("could not fetch cloud preview");
-        }
-        image::load_from_memory(&output.stdout)?.to_rgba8()
-    };
+    let image = load_image(entry)?;
     let preview = build_preview(&image, width.max(1));
     let preview_image = RgbaImage::from_raw(preview.width, preview.height, preview.pixels.clone())
         .context("invalid preview pixels")?;
@@ -411,6 +391,22 @@ pub fn gallery_preview(entry: &CloudEntry, width: u32) -> Result<PreviewImage> {
         params![png, expiry, entry.id],
     )?;
     Ok(preview)
+}
+
+/// Loads the original capture from disk, falling back to its public cloud URL.
+pub fn load_image(entry: &CloudEntry) -> Result<RgbaImage> {
+    if let Some(path) = entry.local_path.as_ref().filter(|path| path.is_file()) {
+        return Ok(image::open(path)?.to_rgba8());
+    }
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error"])
+        .arg(&entry.url)
+        .output()
+        .context("failed to fetch cloud capture")?;
+    if !output.status.success() {
+        bail!("could not fetch cloud capture");
+    }
+    Ok(image::load_from_memory(&output.stdout)?.to_rgba8())
 }
 
 fn record_upload(

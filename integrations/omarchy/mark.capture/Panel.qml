@@ -108,9 +108,10 @@ Panel {
         owner: root
         bar: root.bar
         open: root.opened
+        centerOnBar: root.cloudView
         focusTarget: keys
-        contentWidth: popup.fittedContentWidth(Style.space(root.cloudView ? 760 : 330))
-        contentHeight: popup.fittedContentHeight(root.cloudView ? Style.space(300) : menuColumn.implicitHeight, Style.space(420))
+        contentWidth: popup.fittedContentWidth(Style.space(root.cloudView ? 860 : 330))
+        contentHeight: popup.fittedContentHeight(root.cloudView ? Style.space(320) : menuColumn.implicitHeight, Style.space(440))
 
         PanelKeyCatcher {
             id: keys
@@ -181,16 +182,19 @@ Panel {
                 ListView {
                     id: cloudStrip
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: cloudHeader.bottom; anchors.bottom: parent.bottom
+                    anchors.leftMargin: root.cloudItems.length > 1 ? Style.space(46) : 0
+                    anchors.rightMargin: root.cloudItems.length > 1 ? Style.space(46) : 0
                     orientation: ListView.Horizontal
                     model: root.cloudItems
                     spacing: Style.space(10)
+                    leftMargin: root.cloudItems.length === 1 ? Math.max(0, (width - Style.space(246)) / 2) : 0
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     visible: root.cloudItems.length > 0
                     delegate: Rectangle {
                         required property var modelData
                         required property int index
-                        width: Style.space(184)
+                        width: Style.space(246)
                         height: cloudStrip.height - Style.space(8)
                         radius: Style.cornerRadius
                         color: root.selected === index ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.055)
@@ -219,6 +223,28 @@ Panel {
                             onClicked: root.restoreCapture(index)
                         }
                     }
+                }
+                Rectangle {
+                    id: previousCapture
+                    visible: root.cloudItems.length > 1
+                    anchors.left: parent.left
+                    anchors.verticalCenter: cloudStrip.verticalCenter
+                    width: Style.space(36); height: Style.space(64)
+                    radius: Style.cornerRadius
+                    color: previousMouse.containsMouse ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.16) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.07)
+                    Text { anchors.centerIn: parent; text: "‹"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.space(28) }
+                    MouseArea { id: previousMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.moveCloud(-1) }
+                }
+                Rectangle {
+                    id: nextCapture
+                    visible: root.cloudItems.length > 1
+                    anchors.right: parent.right
+                    anchors.verticalCenter: cloudStrip.verticalCenter
+                    width: Style.space(36); height: Style.space(64)
+                    radius: Style.cornerRadius
+                    color: nextMouse.containsMouse ? Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.16) : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.07)
+                    Text { anchors.centerIn: parent; text: "›"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: Style.space(28) }
+                    MouseArea { id: nextMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.moveCloud(1) }
                 }
                 Text {
                     visible: root.cloudItems.length === 0

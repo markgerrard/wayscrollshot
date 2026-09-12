@@ -226,46 +226,41 @@ fn run_cloud_gallery(preview_width: u32, initial_id: Option<i64>) -> Result<()> 
         bail!("No cloud captures yet. Use Cloud from a capture preview first.");
     }
     let width = preview_width.max(320);
+    let entry = initial_id
+        .and_then(|id| entries.iter().find(|entry| entry.id == id))
+        .unwrap_or(&entries[0]);
+    let image = Arc::new(crate::cloud::load_image(entry)?);
     let (tx, rx) = mpsc::channel();
-    let mut gallery = crate::overlay::LayerShellOverlay::new_gallery(tx, width)?;
-    let mut index = initial_id
-        .and_then(|id| entries.iter().position(|entry| entry.id == id))
-        .unwrap_or(0);
-    show_gallery_entry(&gallery, &entries[index], width)?;
-
-    loop {
-        match rx.recv() {
-            Ok(UserCommand::Previous) => {
-                index = (index + entries.len() - 1) % entries.len();
-                show_gallery_entry(&gallery, &entries[index], width)?;
-            }
-            Ok(UserCommand::Next) => {
-                index = (index + 1) % entries.len();
-                show_gallery_entry(&gallery, &entries[index], width)?;
-            }
-            Ok(UserCommand::Open) => {
-                crate::cloud::open_url(&entries[index].url)?;
-                break;
-            }
-            Ok(UserCommand::Cancel) | Err(_) => break,
-            _ => {}
+    let mut review = crate::overlay::LayerShellOverlay::new_cloud_review(tx, width)?;
+    review.send(LayerMessage::Preview(build_preview(&image, width)));
+    review.send(LayerMessage::Dimensions(image.width(), image.height()));
+    review.send(LayerMessage::Paused(true));
+    match rx.recv() {
+        Ok(UserCommand::Save) => {
+            let path = save_image(image, None)?;
+            println!("{}", path.display());
+            notify_cloud_review(&format!("Saved to {}", path.display()));
         }
+        Ok(UserCommand::Copy) => {
+            copy_to_clipboard(image)?;
+            notify_cloud_review("Copied to clipboard");
+        }
+        Ok(UserCommand::Cloud) => {
+            crate::cloud::copy_url(&entry.url)?;
+            println!("{}", entry.url);
+            notify_cloud_review("Cloud link copied");
+        }
+        Ok(UserCommand::Cancel) | Err(_) => {}
+        _ => {}
     }
-    gallery.stop();
+    review.stop();
     Ok(())
 }
 
-fn show_gallery_entry(
-    gallery: &crate::overlay::LayerShellOverlay,
-    entry: &crate::cloud::CloudEntry,
-    width: u32,
-) -> Result<()> {
-    gallery.send(LayerMessage::Preview(crate::cloud::gallery_preview(
-        entry, width,
-    )?));
-    gallery.send(LayerMessage::Dimensions(entry.width, entry.height));
-    gallery.send(LayerMessage::Paused(true));
-    Ok(())
+fn notify_cloud_review(message: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args(["Cloud capture", message])
+        .status();
 }
 
 fn resolve_region(args: &Args) -> Result<Region> {

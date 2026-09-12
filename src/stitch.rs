@@ -617,12 +617,19 @@ fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> b
     let height = current.height() - offset;
     let mut error = 0u64;
     let mut count = 0u64;
+    let mut sampled_pixels = 0u64;
+    let mut matching_pixels = 0u64;
     let mut texture = 0u64;
     let margin = (current.height() * 15 / 100).min(height / 4);
     for y in (margin..height.saturating_sub(margin)).step_by(3) {
         for x in (0..current.width()).step_by((current.width() / 64).max(1) as usize) {
             let a = previous.get_pixel(x, y + offset);
             let b = current.get_pixel(x, y);
+            let pixel_error = (0..3).map(|c| a[c].abs_diff(b[c]) as u64).sum::<u64>();
+            sampled_pixels += 1;
+            if pixel_error <= 24 {
+                matching_pixels += 1;
+            }
             for c in 0..3 {
                 error += a[c].abs_diff(b[c]) as u64;
                 count += 1;
@@ -632,7 +639,9 @@ fn verified_overlap(previous: &RgbaImage, current: &RgbaImage, offset: u32) -> b
             }
         }
     }
+    let average_matches = count > 0 && (error as f64) / (count as f64) < 3.0;
+    let mostly_matches = sampled_pixels > 0 && matching_pixels * 100 >= sampled_pixels * 76;
     count > 0
-        && error as f64 / (count as f64) < 3.0
+        && (average_matches || mostly_matches)
         && texture as f64 / (count / 3).max(1) as f64 > 0.15
 }

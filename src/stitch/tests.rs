@@ -246,6 +246,19 @@ fn blank_overlap_is_not_evidence_of_scroll() {
 }
 
 #[test]
+fn overlap_allows_a_changing_sidebar_or_floating_widget() {
+    let canvas = make_scroll_canvas(480, 900);
+    let previous = crop_frame(&canvas, 0, 420);
+    let mut current = crop_frame(&canvas, 140, 420);
+    for y in 0..current.height() {
+        for x in 390..current.width() {
+            current.put_pixel(x, y, Rgba([210, 40, (y % 255) as u8, 255]));
+        }
+    }
+    assert!(verified_overlap(&previous, &current, 140));
+}
+
+#[test]
 fn fixed_header_and_footer_are_not_repeated_at_joins() {
     let canvas = make_scroll_canvas(320, 1000);
     let decorate = |mut frame: RgbaImage| {

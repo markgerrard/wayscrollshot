@@ -31,7 +31,6 @@ pub(super) fn draw_control_bar(
     let count = 4;
     let labels = match mode {
         OverlayMode::Review => vec!["Save", "Copy", "Cloud", "Cancel"],
-        OverlayMode::Gallery => vec!["Back", "Next", "Open", "Close"],
         OverlayMode::Live => vec![
             "Done",
             "Copy",
@@ -47,7 +46,6 @@ pub(super) fn draw_control_bar(
     };
     let icons = match mode {
         OverlayMode::Review => vec![0, 1, 5, 4],
-        OverlayMode::Gallery => vec![3, 2, 5, 4],
         OverlayMode::Live => vec![
             0,
             1,
