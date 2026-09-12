@@ -18,5 +18,11 @@ use crate::cli::Args;
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse_args();
-    session::run(args)
+    let result = session::run(args);
+    if let Err(error) = &result {
+        let _ = std::process::Command::new("notify-send")
+            .args(["Scrolling capture stopped", &format!("{error:#}")])
+            .status();
+    }
+    result
 }

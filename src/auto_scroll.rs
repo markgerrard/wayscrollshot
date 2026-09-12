@@ -67,19 +67,9 @@ impl AutoScroller {
         })
     }
     pub fn step(&mut self) -> Result<()> {
-        let result = std::process::Command::new("hyprctl")
-            .arg("getcursorpos")
-            .output()?;
-        let text = String::from_utf8(result.stdout)?;
-        let coords: Vec<i64> = text
-            .trim()
-            .split(',')
-            .filter_map(|v| v.trim().parse().ok())
-            .collect();
+        let coords = cursor_position()?;
         anyhow::ensure!(
-            coords.len() == 2
-                && (coords[0] - self.center.0).abs() <= 24
-                && (coords[1] - self.center.1).abs() <= 24,
+            (coords.0 - self.center.0).abs() <= 24 && (coords.1 - self.center.1).abs() <= 24,
             "Pointer moved; automatic scrolling stopped"
         );
         self.pointer.axis_source(wl_pointer::AxisSource::Wheel);
@@ -95,5 +85,35 @@ impl Drop for AutoScroller {
     fn drop(&mut self) {
         self.pointer.destroy();
         let _ = self.conn.flush();
+    }
+}
+
+fn cursor_position() -> Result<(i64, i64)> {
+    let result = std::process::Command::new("hyprctl")
+        .arg("cursorpos")
+        .output()?;
+    anyhow::ensure!(result.status.success(), "Hyprland cursor query failed");
+    let text = String::from_utf8(result.stdout)?;
+    parse_cursor_position(&text).context("Could not read Hyprland cursor position")
+}
+
+fn parse_cursor_position(text: &str) -> Option<(i64, i64)> {
+    let (x, y) = text.trim().split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_cursor_coordinates_and_rejects_command_errors() {
+        assert_eq!(parse_cursor_position("123, 456\n"), Some((123, 456)));
+        assert_eq!(parse_cursor_position("-1200, -25\n"), Some((-1200, -25)));
+        assert_eq!(parse_cursor_position("unknown request\n"), None);
+    }
+    #[test]
+    #[ignore = "requires a running Hyprland desktop"]
+    fn live_cursor_query() {
+        cursor_position().expect("real desktop cursor query must succeed");
     }
 }

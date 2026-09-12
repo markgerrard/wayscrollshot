@@ -54,6 +54,9 @@ pub fn run(args: Args) -> Result<()> {
     let img = take_snapshot(&state).context(reason.clone())?;
     let mut clipboard = args.clipboard;
     if !args.no_preview {
+        let _ = std::process::Command::new("notify-send")
+            .args(["Capture ready to review", &reason])
+            .status();
         let (tx, rx) = mpsc::channel();
         let mut review = crate::overlay::LayerShellOverlay::new(tx, region, args.preview_width)?;
         review.send(LayerMessage::Preview(build_preview(
