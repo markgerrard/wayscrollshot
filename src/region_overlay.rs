@@ -25,7 +25,6 @@ use wayland_client::{
     Connection, Proxy, QueueHandle,
 };
 
-use crate::constants::{REGION_BORDER_COLOR, REGION_BORDER_WIDTH};
 use crate::types::Region;
 
 #[derive(Clone, Copy, Debug)]
@@ -197,6 +196,7 @@ impl Drop for RegionOverlay {
 }
 
 struct RegionBorder {
+    hole: (i32, i32, u32, u32),
     registry_state: RegistryState,
     output_state: OutputState,
     shm: Shm,
@@ -243,7 +243,7 @@ impl RegionBorder {
         };
 
         canvas.fill(0);
-        draw_border(canvas, self.width, self.height);
+        draw_mask(canvas, self.width, self.height, self.hole);
 
         layer
             .wl_surface()
@@ -402,6 +402,7 @@ fn run_region_overlay(
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
 
     let mut border_state = RegionBorder {
+        hole: (0, 0, 0, 0),
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         shm,
@@ -433,23 +434,14 @@ fn run_region_overlay(
         selected_output.as_ref(),
     );
 
-    let border = REGION_BORDER_WIDTH;
-    let width = region.w + border * 2;
-    let height = region.h + border * 2;
-
-    let output_origin = selected_output_rect
-        .map(|rect| (rect.x, rect.y))
-        .unwrap_or((0, 0));
-
+    let output = selected_output_rect.context("No output for capture mask")?;
+    let width = output.width as u32;
+    let height = output.height as u32;
+    border_state.hole = (region.x - output.x, region.y - output.y, region.w, region.h);
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.set_exclusive_zone(-1);
-    layer.set_margin(
-        region.y - output_origin.1 - border as i32,
-        0,
-        0,
-        region.x - output_origin.0 - border as i32,
-    );
+    layer.set_margin(0, 0, 0, 0);
     layer.set_size(width, height);
 
     let input_region = compositor.wl_compositor().create_region(&qh, ());
@@ -489,48 +481,47 @@ fn run_region_overlay(
     Ok(())
 }
 
-fn draw_border(canvas: &mut [u8], width: u32, height: u32) {
-    let border = REGION_BORDER_WIDTH;
-    let color = [
-        REGION_BORDER_COLOR[2],
-        REGION_BORDER_COLOR[1],
-        REGION_BORDER_COLOR[0],
-        REGION_BORDER_COLOR[3],
-    ];
-
-    // Top border
-    fill_rect(canvas, width, 0, 0, width, border, color);
-    // Bottom border
-    fill_rect(canvas, width, 0, height - border, width, border, color);
-    // Left border
-    fill_rect(canvas, width, 0, border, border, height - border * 2, color);
-    // Right border
-    fill_rect(
-        canvas,
-        width,
-        width - border,
-        border,
-        border,
-        height - border * 2,
-        color,
+fn draw_mask(canvas: &mut [u8], width: u32, height: u32, hole: (i32, i32, u32, u32)) {
+    let (x, y, w, h) = (
+        i64::from(hole.0),
+        i64::from(hole.1),
+        i64::from(hole.2),
+        i64::from(hole.3),
     );
+    for py in 0..height {
+        for px in 0..width {
+            let (cx, cy) = (i64::from(px), i64::from(py));
+            let inside = cx >= x && cx < x + w && cy >= y && cy < y + h;
+            let border = !inside && cx >= x - 2 && cx < x + w + 2 && cy >= y - 2 && cy < y + h + 2;
+            let color = if inside {
+                [0, 0, 0, 0]
+            } else if border {
+                [219, 152, 52, 255]
+            } else {
+                [0, 0, 0, 100]
+            };
+            let i = ((py * width + px) * 4) as usize;
+            canvas[i..i + 4].copy_from_slice(&color);
+        }
+    }
 }
 
-fn fill_rect(canvas: &mut [u8], canvas_width: u32, x: u32, y: u32, w: u32, h: u32, color: [u8; 4]) {
-    let max_x = (x + w).min(canvas_width);
-    let canvas_height = canvas.len() as u32 / (canvas_width * 4);
-    let max_y = (y + h).min(canvas_height);
-
-    for yy in y..max_y {
-        let row = (yy * canvas_width * 4) as usize;
-        for xx in x..max_x {
-            let idx = row + (xx * 4) as usize;
-            if idx + 3 < canvas.len() {
-                canvas[idx] = color[0];
-                canvas[idx + 1] = color[1];
-                canvas[idx + 2] = color[2];
-                canvas[idx + 3] = color[3];
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+    #[test]
+    fn capture_pixels_are_completely_transparent() {
+        let mut pixels = vec![0; 100 * 100 * 4];
+        draw_mask(&mut pixels, 100, 100, (10, 20, 70, 60));
+        for y in 20..80 {
+            for x in 10..80 {
+                assert_eq!(
+                    &pixels[(y * 100 + x) * 4..(y * 100 + x) * 4 + 4],
+                    &[0, 0, 0, 0]
+                );
             }
         }
+        assert_eq!(pixels[3], 100);
+        assert_eq!(pixels[(20 * 100 + 9) * 4 + 3], 255);
     }
 }

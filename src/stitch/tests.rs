@@ -273,3 +273,27 @@ fn fixed_header_and_footer_are_not_repeated_at_joins() {
         &decorate(crop_frame(&canvas, 0, 488))
     );
 }
+
+#[test]
+fn large_crop_relative_steps_preserve_every_row() {
+    let canvas = make_scroll_canvas(480, 2600);
+    let mut s = Stitcher::new(MatchConfig {
+        min_overlap: 73,
+        accept_diff: 3.5,
+        min_append: 2,
+        approx_diff: 0.5,
+        algorithm: Algorithm::ColSample,
+        match_width: 280,
+    });
+    s.push_frame(crop_frame(&canvas, 0, 880));
+    for y in [480, 960, 1440] {
+        assert!(matches!(
+            s.push_frame(crop_frame(&canvas, y, 880)),
+            StitchOutcome::Appended { added: 480 }
+        ));
+    }
+    assert_eq!(
+        s.full_image.as_ref().unwrap().as_ref(),
+        &crop_frame(&canvas, 0, 2320)
+    );
+}

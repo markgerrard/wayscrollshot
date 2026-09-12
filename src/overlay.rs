@@ -39,8 +39,8 @@ mod placement;
 
 use drawing::{blit_preview_bottom, draw_control_bar};
 use placement::{
-    compute_layer_margins, find_output_by_id, output_rects_from_state, probe_output_rects,
-    select_output_for_region, OutputRect,
+    compute_layer_margins, find_output_by_id, live_preview_area, output_rects_from_state,
+    probe_output_rects, select_output_for_region, OutputRect,
 };
 
 const CONTROL_BUTTON_COUNT: u32 = 4;
@@ -48,6 +48,7 @@ const INITIAL_HEIGHT: u32 = CONTROL_BAR_HEIGHT;
 const PREVIEW_GAP: i32 = 8;
 
 pub struct LayerShellOverlay {
+    pub width: u32,
     tx: Option<mpsc::Sender<LayerMessage>>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -59,12 +60,33 @@ impl LayerShellOverlay {
         region: Region,
         preview_width: u32,
     ) -> Result<Self> {
+        Self::new_with_area(command_tx, region, preview_width, None)
+    }
+
+    pub fn new_live(
+        command_tx: mpsc::Sender<UserCommand>,
+        region: Region,
+        preview_width: u32,
+    ) -> Result<Option<Self>> {
+        let outputs = probe_output_rects()?;
+        let Some(area) = live_preview_area(&region, preview_width, &outputs) else {
+            return Ok(None);
+        };
+        Self::new_with_area(command_tx, region, area.w, Some(area)).map(Some)
+    }
+
+    fn new_with_area(
+        command_tx: mpsc::Sender<UserCommand>,
+        region: Region,
+        preview_width: u32,
+        area: Option<Region>,
+    ) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let ready = Arc::new(AtomicBool::new(false));
         let ready_clone = ready.clone();
         let handle = thread::spawn(move || {
             if let Err(err) =
-                run_layer_shell_overlay(rx, command_tx, ready_clone, region, preview_width)
+                run_layer_shell_overlay(rx, command_tx, ready_clone, region, preview_width, area)
             {
                 log::warn!("layer-shell overlay failed: {err}");
             }
@@ -75,6 +97,7 @@ impl LayerShellOverlay {
             bail!("layer-shell overlay did not initialize in time");
         }
         Ok(Self {
+            width: preview_width,
             tx: Some(tx),
             handle: Some(handle),
         })
@@ -109,6 +132,7 @@ struct LayerPreview {
     height: u32,
     max_height: u32,
     region: Region,
+    fixed_area: Option<Region>,
     configured: bool,
     exit: bool,
     preview: Option<PreviewImage>,
@@ -127,13 +151,20 @@ impl LayerPreview {
 
     fn update_position(&mut self) {
         let output_rects = self.output_rects();
-        let (margin_top, margin_left) =
-            compute_layer_margins(&self.region, self.width, &output_rects);
+        let (margin_top, margin_left) = overlay_margins(
+            &self.region,
+            self.width,
+            &output_rects,
+            self.fixed_area.as_ref(),
+        );
         self.layer.set_margin(margin_top, 0, 0, margin_left);
     }
 
     fn desired_size_from_preview(&self, preview: &PreviewImage) -> (u32, u32) {
-        let target_width = preview.width.max(1);
+        let target_width = self
+            .fixed_area
+            .as_ref()
+            .map_or(preview.width.max(1), |a| a.w);
         let max_preview_height = self.max_height.saturating_sub(CONTROL_BAR_HEIGHT);
         let display_preview_height = preview.height.min(max_preview_height);
         let target_height = display_preview_height
@@ -649,6 +680,7 @@ fn run_layer_shell_overlay(
     ready: Arc<AtomicBool>,
     region: Region,
     preview_width: u32,
+    area: Option<Region>,
 ) -> Result<()> {
     log::info!("Starting layer-shell overlay thread");
     let output_rects = match probe_output_rects() {
@@ -687,11 +719,11 @@ fn run_layer_shell_overlay(
     );
 
     let (margin_top, margin_left) =
-        compute_layer_margins(&region, initial_preview_width, &output_rects);
+        overlay_margins(&region, initial_preview_width, &output_rects, area.as_ref());
 
     layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
-    layer.set_exclusive_zone(0);
+    layer.set_exclusive_zone(-1);
     layer.set_margin(margin_top, 0, 0, margin_left);
     layer.set_size(initial_preview_width, INITIAL_HEIGHT);
 
@@ -713,8 +745,9 @@ fn run_layer_shell_overlay(
         input_size: None,
         width: initial_preview_width,
         height: INITIAL_HEIGHT,
-        max_height: region.h,
+        max_height: area.as_ref().map_or(region.h.min(480), |a| a.h),
         region,
+        fixed_area: area,
         configured: false,
         exit: false,
         preview: None,
@@ -772,4 +805,18 @@ fn run_layer_shell_overlay(
     }
 
     Ok(())
+}
+
+fn overlay_margins(
+    region: &Region,
+    width: u32,
+    outputs: &[OutputRect],
+    area: Option<&Region>,
+) -> (i32, i32) {
+    if let Some(a) = area {
+        if let Some(output) = select_output_for_region(a, outputs) {
+            return (a.y - output.y, a.x - output.x);
+        }
+    }
+    compute_layer_margins(region, width, outputs)
 }

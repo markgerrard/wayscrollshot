@@ -17,6 +17,7 @@ pub struct Region {
 #[derive(Default)]
 pub struct Control {
     running: AtomicBool,
+    paused: AtomicBool,
 }
 
 impl Control {
@@ -24,7 +25,15 @@ impl Control {
     pub fn new() -> Self {
         Self {
             running: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
         }
+    }
+
+    pub fn toggle_pause(&self) {
+        self.paused.fetch_xor(true, Ordering::Relaxed);
+    }
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
     }
 
     /// Requests worker shutdown.

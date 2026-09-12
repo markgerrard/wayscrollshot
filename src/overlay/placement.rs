@@ -339,3 +339,88 @@ mod tests {
         assert_eq!(left, 50 + 120 + PREVIEW_GAP);
     }
 }
+
+/// Reserve a preview rectangle wholly outside the capture. Never clamp into it.
+pub(crate) fn live_preview_area(
+    region: &Region,
+    desired_width: u32,
+    outputs: &[OutputRect],
+) -> Option<Region> {
+    let o = select_output_for_region(region, outputs)?;
+    let gap = 8;
+    let left = o.x + gap;
+    let right = o.right() - gap;
+    let top = o.y + gap;
+    let bottom = o.bottom() - gap;
+    let rx = region.x;
+    let ry = region.y;
+    let rr = rx + region.w as i32;
+    let rb = ry + region.h as i32;
+    let slots = [
+        (rr + gap, top, right - rr - gap, bottom - top),
+        (left, top, rx - gap - left, bottom - top),
+        (left, top, right - left, ry - gap - top),
+        (left, rb + gap, right - left, bottom - rb - gap),
+    ];
+    slots
+        .into_iter()
+        .filter(|(_, _, w, h)| *w >= 96 && *h >= 96)
+        .max_by_key(|(_, _, w, h)| (*w).min(desired_width as i32) * (*h).min(480))
+        .map(|(x, y, w, h)| Region {
+            raw: String::new(),
+            x,
+            y,
+            w: (w as u32).min(desired_width),
+            h: (h as u32).min(480),
+        })
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    #[test]
+    fn wide_region_gets_preview_above_without_overlap() {
+        let r = Region {
+            raw: String::new(),
+            x: 20,
+            y: 180,
+            w: 1880,
+            h: 850,
+        };
+        let p = live_preview_area(
+            &r,
+            280,
+            &[OutputRect {
+                id: 0,
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }],
+        )
+        .unwrap();
+        assert!(p.y + p.h as i32 <= r.y);
+    }
+    #[test]
+    fn fullscreen_has_no_safe_live_preview() {
+        let r = Region {
+            raw: String::new(),
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        assert!(live_preview_area(
+            &r,
+            280,
+            &[OutputRect {
+                id: 0,
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            }]
+        )
+        .is_none());
+    }
+}

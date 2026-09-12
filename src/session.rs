@@ -29,7 +29,19 @@ pub fn run(args: Args) -> Result<()> {
     let control = Arc::new(Control::new());
     let state = Arc::new(Mutex::new(StitchState::default()));
     let (tx, rx) = mpsc::channel();
-    // No surfaces are mapped while capturing. This also works for full-width regions.
+    let mut mask = if args.no_border {
+        None
+    } else {
+        Some(crate::region_overlay::RegionOverlay::new(region.clone())?)
+    };
+    let (ui_tx, ui_rx) = mpsc::channel();
+    let mut live = if args.no_preview {
+        None
+    } else {
+        crate::overlay::LayerShellOverlay::new_live(ui_tx, region.clone(), args.preview_width)?
+    };
+    let mut revision = 0;
+    let mut action = None;
     let worker = spawn_capture_worker(
         region.clone(),
         control.clone(),
@@ -38,6 +50,28 @@ pub fn run(args: Args) -> Result<()> {
         tx,
     );
     let reason = loop {
+        if let Some(overlay) = live.as_ref() {
+            let st = state.lock().expect("state lock");
+            if st.revision != revision {
+                revision = st.revision;
+                if let Some(img) = st.full_image.as_ref() {
+                    overlay.send(LayerMessage::Preview(build_preview(img, overlay.width)));
+                }
+            }
+        }
+        match ui_rx.try_recv() {
+            Ok(UserCommand::TogglePause) => {
+                control.toggle_pause();
+                if let Some(o) = live.as_ref() {
+                    o.send(LayerMessage::Paused(control.is_paused()));
+                }
+            }
+            Ok(command) => {
+                action = Some(command);
+                break "Capture finished".to_string();
+            }
+            Err(_) => {}
+        }
         if socket.finish_requested() {
             break "Capture finished".to_string();
         }
@@ -51,9 +85,19 @@ pub fn run(args: Args) -> Result<()> {
     worker
         .join()
         .map_err(|_| anyhow!("capture worker panicked"))?;
+    if let Some(overlay) = live.as_mut() {
+        overlay.stop();
+    }
+    if let Some(overlay) = mask.as_mut() {
+        overlay.stop();
+    }
+    if matches!(action, Some(UserCommand::Cancel)) {
+        return Ok(());
+    }
     let img = take_snapshot(&state).context(reason.clone())?;
-    let mut clipboard = args.clipboard;
-    if !args.no_preview {
+    let mut clipboard =
+        matches!(action, Some(UserCommand::Copy)) || (action.is_none() && args.clipboard);
+    if !args.no_preview && action.is_none() {
         let _ = std::process::Command::new("notify-send")
             .args(["Capture ready to review", &reason])
             .status();
@@ -159,7 +203,7 @@ fn capture_loop(
         None
     };
     let config = MatchConfig {
-        min_overlap: (region.h / 3).max(80),
+        min_overlap: (region.h / 12).max(48),
         accept_diff: 3.5,
         min_append: 2,
         approx_diff: 0.5,
@@ -177,7 +221,14 @@ fn capture_loop(
     let started = Instant::now();
     let mut last_accepted = Instant::now();
     while control.is_running() {
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(50));
+        if control.is_paused() {
+            candidate = None;
+            submitted = false;
+            stable_since = Instant::now();
+            last_accepted = Instant::now();
+            continue;
+        }
         if auto.is_some() && started.elapsed() > Duration::from_secs(180) {
             return Ok("Time limit reached; partial capture".into());
         }
@@ -199,6 +250,9 @@ fn capture_loop(
         submitted = true;
         let outcome = stitcher.push_frame(frame);
         if let StitchOutcome::Appended { added } = &outcome {
+            if let Some(scroller) = auto.as_mut() {
+                scroller.observe(*added);
+            }
             log::info!("Appended {added} pixels");
         }
         match outcome {
@@ -234,9 +288,9 @@ fn capture_loop(
             if stitcher.stats().total_height as u64 * region.w as u64 * 4 > 192 * 1024 * 1024 {
                 return Ok("Image size limit reached; partial capture".into());
             }
-            scroller.step()?;
+            scroller.step(region.h * args.scroll_percent / 100)?;
             // Allow scroll animations to start before looking for a settled frame.
-            thread::sleep(Duration::from_millis(180));
+            thread::sleep(Duration::from_millis(60));
             candidate = None;
             submitted = false;
             stable_since = Instant::now();
@@ -272,9 +326,11 @@ fn apply_state_update(
     preview_tx: Option<&mpsc::Sender<LayerMessage>>,
     preview_width: u32,
 ) {
-    let preview = stitcher
-        .full_image()
-        .map(|img| build_preview(img.as_ref(), preview_width));
+    let preview = preview_tx.and_then(|_| {
+        stitcher
+            .full_image()
+            .map(|img| build_preview(img.as_ref(), preview_width))
+    });
     if let (Some(tx), Some(preview)) = (preview_tx, preview.as_ref()) {
         let _ = tx.send(LayerMessage::Preview(preview.clone()));
     }

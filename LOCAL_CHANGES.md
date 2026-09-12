@@ -41,3 +41,15 @@ A live Chrome page with 18 numbered sections was auto-scrolled and stitched to a
 Installed controls: Super+R starts/finishes manual capture; Super+Alt+R starts auto-scroll.
 Validation completed: 24 tests passed; release build succeeded; clippy succeeded
 with seven pre-existing style warnings. Installed shortcut IPC smoke test passed.
+
+
+## Live preview and speed update
+
+Outside mask remains visible, with a transparent capture rectangle. Preview uses
+space outside the crop, caps at 480 pixels tall, and follows the latest content.
+Full-screen crops without spare space retain final review only. Overlay positions
+ignore panel exclusive zones to match capture coordinates exactly.
+Auto-scroll targets 60% of crop height in wheel ticks and learns pixels per tick.
+Default settling delay is 180 ms. The 18-section test page took about 7 seconds,
+versus about 20 previously. All 31 tests passed. On the live desktop, a capture
+with the mask and preview active matched its baseline with zero changed pixels.

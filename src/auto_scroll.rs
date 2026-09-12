@@ -28,6 +28,8 @@ delegate_noop!(State: ZwlrVirtualPointerV1);
 
 pub struct AutoScroller {
     center: (i64, i64),
+    pixels_per_tick: f64,
+    last_ticks: i32,
     conn: Connection,
     queue: wayland_client::EventQueue<State>,
     pointer: ZwlrVirtualPointerV1,
@@ -57,6 +59,8 @@ impl AutoScroller {
         );
         queue.roundtrip(&mut State)?;
         Ok(Self {
+            pixels_per_tick: 120.0,
+            last_ticks: 1,
             center: (
                 i64::from(region.x) + i64::from(region.w) / 2,
                 i64::from(region.y) + i64::from(region.h) / 2,
@@ -66,15 +70,24 @@ impl AutoScroller {
             pointer,
         })
     }
-    pub fn step(&mut self) -> Result<()> {
+    pub fn observe(&mut self, pixels: u32) {
+        self.pixels_per_tick = (pixels as f64 / self.last_ticks.max(1) as f64).clamp(20.0, 500.0);
+    }
+    pub fn step(&mut self, target_pixels: u32) -> Result<()> {
+        self.last_ticks =
+            ((target_pixels as f64 / self.pixels_per_tick).floor() as i32).clamp(1, 8);
         let coords = cursor_position()?;
         anyhow::ensure!(
             (coords.0 - self.center.0).abs() <= 24 && (coords.1 - self.center.1).abs() <= 24,
             "Pointer moved; automatic scrolling stopped"
         );
         self.pointer.axis_source(wl_pointer::AxisSource::Wheel);
-        self.pointer
-            .axis_discrete(0, wl_pointer::Axis::VerticalScroll, 15.0, 1);
+        self.pointer.axis_discrete(
+            0,
+            wl_pointer::Axis::VerticalScroll,
+            15.0 * f64::from(self.last_ticks),
+            self.last_ticks,
+        );
         self.pointer.frame();
         self.conn.flush()?;
         self.queue.roundtrip(&mut State)?;

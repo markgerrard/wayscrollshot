@@ -254,3 +254,19 @@ fn glyph_rows(ch: char) -> Option<[u8; 7]> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn capped_preview_displays_latest_rows() {
+        let preview = PreviewImage {
+            width: 1,
+            height: 5,
+            pixels: (0..5).flat_map(|n| [n, n, n, 255]).collect(),
+        };
+        let mut canvas = vec![0; 12];
+        blit_preview_bottom(&mut canvas, 1, 3, &preview);
+        assert_eq!(canvas, vec![2, 2, 2, 255, 3, 3, 3, 255, 4, 4, 4, 255]);
+    }
+}

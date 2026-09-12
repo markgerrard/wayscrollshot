@@ -37,8 +37,12 @@ pub struct Args {
     pub toggle: bool,
 
     /// Milliseconds of stable content required before accepting a frame.
-    #[arg(long, default_value_t = 450, value_parser = clap::value_parser!(u64).range(100..=5000))]
+    #[arg(long, default_value_t = 180, value_parser = clap::value_parser!(u64).range(100..=5000))]
     pub settle_ms: u64,
+
+    /// Percentage of the crop height to advance per automatic scroll step.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(10..=60))]
+    pub scroll_percent: u32,
 
     /// Preview width in pixels
     #[arg(short = 'w', long, default_value_t = PREVIEW_MAX_WIDTH)]
@@ -48,11 +52,11 @@ pub struct Args {
     #[arg(short, long)]
     pub clipboard: bool,
 
-    /// Save immediately without showing the final review window
+    /// Hide live preview and save immediately without final review
     #[arg(long)]
     pub no_preview: bool,
 
-    /// Compatibility flag: borders are always hidden during capture
+    /// Hide the capture mask and outline
     #[arg(long)]
     pub no_border: bool,
 
