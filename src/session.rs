@@ -12,7 +12,7 @@ use crate::stitch::{build_preview, init_opencv_runtime, MatchConfig, StitchOutco
 use crate::types::{Control, LayerMessage, Region, StitchState, UserCommand};
 
 /// Runs one interactive capture session from region selection to final action.
-pub fn run(args: Args) -> Result<()> {
+pub fn run(mut args: Args) -> Result<()> {
     let Some(socket) = crate::control_socket::CaptureSocket::open(args.toggle)? else {
         return Ok(());
     };
@@ -20,13 +20,33 @@ pub fn run(args: Args) -> Result<()> {
         bail!("Wayland session required");
     }
     let region = if args.slurp_output().is_none() {
-        let Some(region) = crate::selection::select()? else {
+        let Some((region, scrolling)) =
+            crate::selection::select(!args.screenshot && !args.capture_bar, args.capture_bar)?
+        else {
             return Ok(());
         };
+        args.screenshot = !scrolling;
+        if args.capture_bar {
+            args.auto_scroll = scrolling;
+        }
         region
     } else {
         resolve_region(&args)?
     };
+    if args.screenshot {
+        anyhow::ensure!(region.w > 0 && region.h > 0, "Select a non-empty area");
+        // Let the compositor remove the selector before capturing the single frame.
+        thread::sleep(Duration::from_millis(120));
+        let image = Arc::new(capture_frame(&region)?);
+        return finish_capture(
+            args,
+            &socket,
+            region,
+            image,
+            "Screenshot captured".into(),
+            None,
+        );
+    }
     anyhow::ensure!(
         region.w >= 32 && region.h >= 160,
         "Select an area at least 32 pixels wide and 160 pixels high"
@@ -101,6 +121,17 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
     let img = take_snapshot(&state).context(reason.clone())?;
+    finish_capture(args, &socket, region, img, reason, action)
+}
+
+fn finish_capture(
+    args: Args,
+    socket: &crate::control_socket::CaptureSocket,
+    region: Region,
+    img: Arc<RgbaImage>,
+    reason: String,
+    action: Option<UserCommand>,
+) -> Result<()> {
     let mut clipboard =
         matches!(action, Some(UserCommand::Copy)) || (action.is_none() && args.clipboard);
     if !args.no_preview && action.is_none() {
@@ -146,7 +177,7 @@ pub fn run(args: Args) -> Result<()> {
         format!("{reason}. Saved to {}", path.display())
     };
     let _ = std::process::Command::new("notify-send")
-        .args(["Scrolling capture", &message])
+        .args(["Screen capture", &message])
         .status();
     Ok(())
 }

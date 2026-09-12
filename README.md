@@ -4,6 +4,10 @@ An Omarchy / Hyprland fork of [jswysnemc/wayscrollshot](https://github.com/jswys
 
 ## This fork
 
+**Super + Shift + Print Screen** opens the unified capture bar on this Omarchy installation. Choose **Area**, **Full screen**, **Window**, or **Scrolling**, then press **Enter / Capture**. Still captures go directly to the Save / Copy review; Scrolling starts automatic scrolling. Existing Print Screen bindings remain unchanged.
+
+From the terminal, use `wayscrollshot --capture-bar` for the mode bar or `wayscrollshot --screenshot` for a single screenshot. The original scrolling shortcuts remain available.
+
 - Drag to select, press **Space** to select the window under the pointer, or use **F / Full screen** for the monitor where selection started.
 - Adjust any edge or corner before pressing **Enter / Capture**. In browsers, lower the top edge to exclude tabs and the address bar.
 - Dimmed capture mask, a bounded live preview that follows new content, and labeled controls with ImageGen artwork.

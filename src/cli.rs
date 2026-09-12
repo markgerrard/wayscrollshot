@@ -28,6 +28,14 @@ pub struct Args {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// Open the unified Area / Screen / Window / Scrolling capture bar.
+    #[arg(long)]
+    pub capture_bar: bool,
+
+    /// Take one still screenshot with the native selection and review UI.
+    #[arg(long, conflicts_with = "auto_scroll")]
+    pub screenshot: bool,
+
     /// Scroll automatically, saving when the page stops moving.
     #[arg(long)]
     pub auto_scroll: bool,
@@ -89,6 +97,17 @@ mod tests {
 
     use super::Args;
 
+    #[test]
+    fn still_capture_does_not_enable_scrolling() {
+        let args = Args::try_parse_from(["wayscrollshot", "--screenshot"]).unwrap();
+        assert!(args.screenshot && !args.auto_scroll);
+        assert!(Args::try_parse_from(["wayscrollshot", "--screenshot", "--auto-scroll"]).is_err());
+        assert!(
+            Args::try_parse_from(["wayscrollshot", "--capture-bar"])
+                .unwrap()
+                .capture_bar
+        );
+    }
     #[test]
     fn parses_quoted_slurp_region() {
         let args = Args::try_parse_from(["wayscrollshot", "10,20 300x400"]).unwrap();

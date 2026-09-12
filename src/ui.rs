@@ -95,7 +95,7 @@ pub fn icon(p: &mut Pixmap, index: usize, x: f32, y: f32, size: u32) {
             .unwrap()
             .to_rgba8();
         // Bounding boxes of the six generated symbols, including their highlights.
-        [
+        let mut icons: Vec<_> = [
             (120, 260, 240, 260),
             (515, 260, 240, 260),
             (925, 270, 215, 245),
@@ -112,7 +112,19 @@ pub fn icon(p: &mut Pixmap, index: usize, x: f32, y: f32, size: u32) {
                 image::imageops::FilterType::Lanczos3,
             )
         })
-        .collect()
+        .collect();
+        let modes = image::load_from_memory(include_bytes!("../assets/capture-modes.png"))
+            .unwrap()
+            .to_rgba8();
+        for (x, y, w, h) in [(170, 160, 590, 590), (1080, 180, 530, 530)] {
+            icons.push(image::imageops::resize(
+                &image::imageops::crop_imm(&modes, x, y, w, h).to_image(),
+                20,
+                20,
+                image::imageops::FilterType::Lanczos3,
+            ));
+        }
+        icons
     });
     debug_assert_eq!(size, 20);
     let im = &icons[index];

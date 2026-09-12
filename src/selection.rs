@@ -31,6 +31,14 @@ use crate::overlay::placement::{find_output_by_id, probe_output_rects, OutputRec
 use crate::{types::Region, ui};
 use serde_json::Value;
 
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Area,
+    Screen,
+    Window,
+    Scroll,
+}
+
 struct Selector {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -43,6 +51,9 @@ struct Selector {
     configured: bool,
     dirty: bool,
     hover: Option<usize>,
+    mode: Mode,
+    show_modes: bool,
+    window_locked: bool,
     exit: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: bool,
@@ -112,7 +123,7 @@ impl Selector {
     }
     fn finish(&mut self) {
         if let Some(r) = &self.selection {
-            if r.w >= 32 && r.h >= 160 {
+            if self.valid_selection() {
                 self.result = Some(rectangle(
                     r.x + self.output.x,
                     r.y + self.output.y,
@@ -123,23 +134,106 @@ impl Selector {
             }
         }
     }
+    fn valid_selection(&self) -> bool {
+        self.selection.as_ref().is_some_and(|r| {
+            if self.mode == Mode::Scroll {
+                r.w >= 32 && r.h >= 160
+            } else {
+                r.w > 0 && r.h > 0
+            }
+        })
+    }
+    fn toolbar(&self) -> Vec<(f64, f64, &'static str, usize)> {
+        if self.show_modes {
+            vec![
+                (0., 94., "Area", 0),
+                (98., 94., "Full screen", 5),
+                (196., 94., "Window", 6),
+                (294., 94., "Scrolling", 7),
+                (408., 90., "Cancel", 4),
+                (504., 124., "Capture", 0),
+            ]
+        } else {
+            vec![
+                (0., 106., "Cancel", 4),
+                (110., 166., "Full screen", 5),
+                (280., 160., "Capture", 0),
+            ]
+        }
+    }
+    fn toolbar_width(&self) -> f64 {
+        if self.show_modes {
+            628.
+        } else {
+            440.
+        }
+    }
+    fn window_at_pointer(&mut self) {
+        let x = self.position.0 as i32 + self.output.x;
+        let y = self.position.1 as i32 + self.output.y;
+        self.selection = self
+            .windows
+            .iter()
+            .find(|r| x >= r.x && y >= r.y && x < r.x + r.w as i32 && y < r.y + r.h as i32)
+            .map(|r| {
+                let left = (r.x - self.output.x).max(0);
+                let top = (r.y - self.output.y).max(0);
+                let right = (r.x - self.output.x + r.w as i32).min(self.width as i32);
+                let bottom = (r.y - self.output.y + r.h as i32).min(self.height as i32);
+                rectangle(
+                    left,
+                    top,
+                    (right - left).max(0) as u32,
+                    (bottom - top).max(0) as u32,
+                )
+            });
+    }
     fn toolbar_hover(&self) -> Option<usize> {
         let (x, y) = self.position;
-        let bx = (self.width as f64 - 440.) / 2.;
-        if y < self.height as f64 - 84. || y > self.height as f64 - 36. {
+        let bx = (self.width as f64 - self.toolbar_width()) / 2.;
+        if y < self.height as f64 - 88. || y > self.height as f64 - 32. {
             return None;
         }
-        [(0., 106.), (110., 166.), (280., 160.)]
+        self.toolbar()
             .iter()
-            .position(|(offset, w)| x >= bx + offset && x < bx + offset + w)
+            .position(|(offset, w, _, _)| x >= bx + offset && x < bx + offset + w)
     }
     fn press(&mut self) {
         if let Some(button) = self.toolbar_hover() {
-            match button {
-                0 => self.exit = true,
-                1 => self.choose_screen(),
-                _ => self.finish(),
+            if self.show_modes {
+                match button {
+                    0 => {
+                        self.mode = Mode::Area;
+                        self.selection = None;
+                    }
+                    1 => {
+                        self.mode = Mode::Screen;
+                        self.choose_screen();
+                    }
+                    2 => {
+                        self.window_locked = false;
+                        self.mode = Mode::Window;
+                        self.selection = None;
+                    }
+                    3 => {
+                        self.mode = Mode::Scroll;
+                        self.selection = None;
+                    }
+                    4 => self.exit = true,
+                    _ => self.finish(),
+                }
+            } else {
+                match button {
+                    0 => self.exit = true,
+                    1 => self.choose_screen(),
+                    _ => self.finish(),
+                }
             }
+            return;
+        }
+        if self.mode == Mode::Window && !self.window_locked {
+            self.window_at_pointer();
+            self.window_locked = true;
             return;
         }
         let (x, y) = self.position;
@@ -246,19 +340,23 @@ impl Selector {
             ui::rounded(&mut p, lx, ly, tw + 24., 28., 8., [28, 29, 34, 245]);
             ui::text(&mut p, &label, lx + 12., ly + 5., 15., [255, 255, 255, 255]);
         }
-        let valid = self
-            .selection
-            .as_ref()
-            .is_some_and(|r| r.w >= 32 && r.h >= 160);
+        let valid = self.valid_selection();
         let title = match &self.selection {
             Some(_) if valid => "Ready when you are",
-            Some(_) => "Select at least 32 × 160 pixels",
+            Some(_) if self.mode == Mode::Scroll => "Select at least 32 × 160 pixels",
+            Some(_) => "Drag to choose your area",
             None => "What would you like to capture?",
         };
         let subtitle = if self.selection.is_some() {
             "Drag an edge or corner to refine your selection"
         } else {
-            "Drag anywhere to select an area"
+            if self.mode == Mode::Window {
+                "Point at a window, then press Enter"
+            } else if self.mode == Mode::Scroll {
+                "Select the content to scroll automatically"
+            } else {
+                "Drag anywhere to select an area"
+            }
         };
         let pw = 540.;
         let px = (self.width as f32 - pw) / 2.;
@@ -290,62 +388,51 @@ impl Selector {
             self.width as f32 / 2.,
             119.,
         );
-        let bx = (self.width as f32 - 440.) / 2.;
+        let tw = self.toolbar_width() as f32;
+        let bx = (self.width as f32 - tw) / 2.;
         let by = self.height as f32 - 84.;
-        ui::panel(&mut p, bx - 8., by - 8., 456., 64., 18.);
-        for (offset, w, label, primary) in [
-            (0., 106., "Cancel", false),
-            (110., 166., "Full screen", false),
-            (280., 160., "Capture", true),
-        ] {
+        ui::panel(&mut p, bx - 8., by - 12., tw + 16., 72., 18.);
+        for (i, (offset, w, label, icon)) in self.toolbar().iter().enumerate() {
+            let (offset, w) = (*offset as f32, *w as f32);
+            let primary = *label == "Capture";
+            let selected = self.show_modes
+                && i < 4
+                && i == match self.mode {
+                    Mode::Area => 0,
+                    Mode::Screen => 1,
+                    Mode::Window => 2,
+                    Mode::Scroll => 3,
+                };
             ui::rounded(
                 &mut p,
                 bx + offset,
-                by,
+                by - 4.,
                 w,
-                48.,
-                12.,
+                56.,
+                10.,
                 if primary && !valid {
-                    [42, 45, 54, 255]
-                } else if self.hover
-                    == Some(if primary {
-                        2
-                    } else if offset == 0. {
-                        0
-                    } else {
-                        1
-                    })
-                {
-                    [79, 92, 120, 255]
+                    [38, 40, 48, 255]
+                } else if self.hover == Some(i) {
+                    [69, 77, 96, 255]
                 } else if primary {
                     [64, 106, 179, 255]
+                } else if selected {
+                    [60, 64, 77, 255]
                 } else {
-                    [43, 45, 54, 255]
+                    [33, 35, 42, 255]
                 },
             );
-            ui::icon(
-                &mut p,
-                if primary {
-                    0
-                } else if offset == 0. {
-                    4
-                } else {
-                    5
-                },
-                bx + offset + (w - ui::text_width(label, 17.) - 30.) / 2.,
-                by + 14.,
-                20,
-            );
+            ui::icon(&mut p, *icon, bx + offset + w / 2. - 10., by + 2., 20);
             ui::text(
                 &mut p,
                 label,
-                bx + offset + (w - ui::text_width(label, 17.) - 30.) / 2. + 30.,
-                by + 14.,
-                17.,
+                bx + offset + (w - ui::text_width(label, 14.)) / 2.,
+                by + 30.,
+                14.,
                 if primary && !valid {
-                    [124, 129, 145, 255]
+                    [121, 126, 142, 255]
                 } else {
-                    [245, 245, 247, 255]
+                    [240, 241, 246, 255]
                 },
             );
         }
@@ -570,8 +657,19 @@ impl KeyboardHandler for Selector {
         match event.keysym {
             Keysym::Escape => self.exit = true,
             Keysym::Return => self.finish(),
-            Keysym::space => self.choose_window(),
-            Keysym::f | Keysym::F => self.choose_screen(),
+            Keysym::space => {
+                if self.show_modes {
+                    self.mode = Mode::Window;
+                }
+                self.choose_window();
+                self.window_locked = true;
+            }
+            Keysym::f | Keysym::F => {
+                if self.show_modes {
+                    self.mode = Mode::Screen;
+                }
+                self.choose_screen();
+            }
             _ => {}
         }
         self.draw(qh);
@@ -614,6 +712,15 @@ impl PointerHandler for Selector {
 
             self.position = event.position;
             let hover = self.toolbar_hover();
+            if self.mode == Mode::Window
+                && !self.window_locked
+                && hover.is_none()
+                && self.drag.is_none()
+                && matches!(event.kind, PointerEventKind::Motion { .. })
+            {
+                self.window_at_pointer();
+                self.dirty = true;
+            }
             if hover != self.hover {
                 self.hover = hover;
                 self.dirty = true;
@@ -678,7 +785,7 @@ fn query(command: &str) -> Result<Value> {
     anyhow::ensure!(out.status.success(), "Cannot read desktop geometry");
     Ok(serde_json::from_slice(&out.stdout)?)
 }
-pub fn select() -> Result<Option<Region>> {
+pub fn select(scrolling: bool, show_modes: bool) -> Result<Option<(Region, bool)>> {
     let cursor = query("cursorpos")?;
     let cx = cursor["x"].as_i64().unwrap_or(0);
     let cy = cursor["y"].as_i64().unwrap_or(0);
@@ -761,6 +868,9 @@ pub fn select() -> Result<Option<Region>> {
         configured: false,
         dirty: false,
         hover: None,
+        mode: if scrolling { Mode::Scroll } else { Mode::Area },
+        show_modes,
+        window_locked: false,
         exit: false,
         keyboard: None,
         keyboard_focus: false,
@@ -782,7 +892,7 @@ pub fn select() -> Result<Option<Region>> {
     state.layer.wl_surface().attach(None, 0, 0);
     state.layer.commit();
     conn.flush()?;
-    Ok(state.result)
+    Ok(state.result.map(|r| (r, state.mode == Mode::Scroll)))
 }
 #[cfg(test)]
 mod tests {
